@@ -40,13 +40,15 @@ public:
     LogLevel mLogLevel = LogLevel_Standard;
     bool mWindowed;
     bool mBtnRemap;
+    uint32_t mMaxRes;
 
     LaunchOptions() :
             mStream(nullptr),
             mServerIP{""},
             mLogLevel(LogLevel_Standard),
             mWindowed(false),
-            mBtnRemap(true)
+            mBtnRemap(true),
+            mMaxRes(0)
     { }
 
     // fast constructor for actual cmdline OSes
@@ -133,6 +135,12 @@ protected:
         }
         else if (tok == "-n" || tok == "-noBtnRemap") {
             mBtnRemap = false;
+        }
+        else if (tok == "-m" || tok == "-maxRes") {
+            GetNextToken(tok);
+            uint32_t max = std::stoul(tok);
+            if (max >= 512 && max <= 4096)
+                mMaxRes = max;
         }
     }
 };
