@@ -5,8 +5,8 @@ NVIDIA CloudXR sample application for ARCore. Heavily based on hello_ar_c ARCore
 
 Prerequisites
 ----------------------
-* Android Studio v3.4 or later. [Link](https://developer.android.com/studio)
-  * (optional) A fully setup Android development environment with Android SDK, Android NDK and Android Platform Tools and OpenJDK 1.8
+* Android Studio v3.4 or later. [Link](https://developer.android.com/studio).
+  * (optional) A fully setup Android development environment with Android SDK, Android NDK and Android Platform Tools and OpenJDK 1.8.
 
 Building with Android Studio
 ----------------------
@@ -18,16 +18,16 @@ Building with Android Studio
 Building with Gradle (optional)
 ----------------------
 * Copy CloudXR SDK client package (CloudXR.aar file from Client/Lib/Android folder) into app/libs folder.
-* Execute Gradle build ("gradlew build") in the project folder
+* Execute Gradle build ("gradlew build") in the project folder.
 
 Installing
 ----------------------
-* Enable developer mode on the target device
-* Connect the target device to the workstation
-* Setup ADB connection
-* Run the application from Android Studio
-  * (optional) If building with Gradle execute install ("gradlew installRelease") in the project folder
-* Give "CloudXR AR Client" application permission to read the external storage
+* Enable developer mode on the target device.
+* Connect the target device to the workstation.
+* Setup ADB connection.
+* Run the application from Android Studio.
+  * (optional) If building with Gradle execute install ("gradlew installRelease") in the project folder.
+* Give "CloudXR AR Client" application permission to read the external storage.
 
 Running
 ----------------------
@@ -43,24 +43,23 @@ Running
     * On your server/workstation, in the /TestTools folder in the root of the CloudXR SDK, you will find a sample application `ar_test.exe`.  If you launch that, you should see a three dimensional grid of boxes merged with the camera view.
 * Press and hold on the screen to reset the calibration, and re-scan the environment.
 
-
 Optional
 ----------------------
 * To connect to server automatically, create a file named CloudXRLaunchOptions.txt with IP address of server:
-    * -s [server ip]
+    * `-s [server ip]`
 * Then copy the file to the root folder of device sdcard
     * via MTP just drag and drop to root
     * or using ADB:
-        * adb push CloudXRLaunchOptions.txt /sdcard/CloudXRLaunchOptions.txt
+        * `adb push CloudXRLaunchOptions.txt /sdcard/CloudXRLaunchOptions.txt`
 * If started from Android Studio, in Run/Debug Configurations you can set server in Launch Flags, using:
-    * --es args "-s [server ip]"
+    * `--es args "-s [server ip]"`
 * Other launch options you can specify in text file or launch flags include:
-    * -v
+    * `-v`
         * Enables more verbose logging
-    * -f [0.5-1.0]
+    * `-f [0.5-1.0]`
         * Adjust the target stream resolution to a factor of display resolution.
         * The default is 0.75, the range is 0.5 to 1.0
-    * -e [on|off]
+    * `-e [on|off]`
         * Enable/disable environmental lighting support.  Default is on, if performance issues try it off.
 
 License
