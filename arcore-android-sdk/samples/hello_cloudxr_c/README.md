@@ -7,7 +7,7 @@ Prerequisites
 ----------------------
 * Android Studio v3.4 or later. [Link](https://developer.android.com/studio)
   * (optional) A fully setup Android development environment with Android SDK, Android NDK and Android Platform Tools and OpenJDK 1.8
-* CloudXR SDK Release
+* CloudXR 1.0 SDK Release
 
 Building with Android Studio
 ----------------------
