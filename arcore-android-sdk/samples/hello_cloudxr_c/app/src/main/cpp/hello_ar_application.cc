@@ -72,17 +72,17 @@ protected:
     // we override for extra cmdline options...
     virtual void HandleArg(std::string &tok)
     {
-      if (tok == "-e" || tok == "-envlighting") { // env lighting flag
+      if (tok == "-e" || tok == "-env-lighting") { // env lighting flag
         GetNextToken(tok);
-        if (tok=="1" || tok=="on") {
+        if (tok=="1") {
           using_env_lighting_ = true;
         }
-        else if (tok=="0" || tok=="off") {
+        else if (tok=="0") {
           using_env_lighting_ = false;
         }
-        // else leave as whatever default is...
+        // else leave as-is...
       }
-      else if (tok == "-r" || tok == "-resfactor") { // resfactor override
+      else if (tok == "-r" || tok == "-res-factor") { // resfactor override
         GetNextToken(tok);
         float factor = std::stof(tok);
         if (factor >= 0.5f && factor <= 1.0f)
