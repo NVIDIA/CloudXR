@@ -51,7 +51,6 @@ const vec2 positions[4] = vec2[4](
 void main() {
   gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
   vsUV0 = positions[gl_VertexID]/2.0 + vec2(0.5, 0.5);
-  vsUV0.y = 1.f - vsUV0.y;
 }
 )";
 
