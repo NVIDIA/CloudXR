@@ -7,7 +7,7 @@ Prerequisites
 ----------------------
 * Android Studio v3.4 or later. [Link](https://developer.android.com/studio)
   * (optional) A fully setup Android development environment with Android SDK, Android NDK and Android Platform Tools and OpenJDK 1.8
-* CloudXR 1.0 SDK Release
+* CloudXR 1.2 SDK Release
 
 Building with Android Studio
 ----------------------
@@ -47,22 +47,26 @@ Running
 
 Optional
 ----------------------
-* To connect to server automatically, create a file named CloudXRLaunchOptions.txt with IP address of server:
-    * -s [server ip]
-* Then copy the file to the root folder of device sdcard
-    * via MTP just drag and drop to root
-    * or using ADB:
-        * adb push CloudXRLaunchOptions.txt /sdcard/CloudXRLaunchOptions.txt
-* If started from Android Studio, in Run/Debug Configurations you can set server in Launch Flags, using:
-    * --es args "-s [server ip]"
-* Other launch options you can specify in text file or launch flags include:
+* To connect to server automatically
+    * Using a 'launch options' file on device.
+        * Create a text file on development PC named CloudXRLaunchOptions.txt
+        * Add the server IP to the file in format similar to a commandline argument:
+            * `-s [server ip]`
+        * Then copy the file to the root folder of device sdcard
+            * via MTP just drag and drop to root
+            * or using ADB:
+                * `adb push CloudXRLaunchOptions.txt /sdcard/CloudXRLaunchOptions.txt`
+    * Using commandline argument from Android Studio
+        * In Run/Debug Configurations you can set server in "Launch Flags", using:
+            * `--es args "-s [server ip]"`
+* Other launch options you can specify in the text file or the launch cmdline/flags include:
     * -v
         * Enables more verbose logging
-    * -f [factor]
+    * -r [res-factor]
         * Allows adjusting the target stream resolution as a factor of display resolution.
         * The default value is 0.75, so default stream res will be 0.75 * (device res).
         * The allowed range for factor is 0.5 to 1.0 multiplier.
-    * -e [on|off]
+    * -e [1|0]
         * Enable/disable environmental lighting support.
         * Default is on, if performance issues try turning off.
 
