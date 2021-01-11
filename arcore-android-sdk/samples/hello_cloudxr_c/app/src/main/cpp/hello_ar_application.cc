@@ -46,88 +46,99 @@
 #include "plane_renderer.h"
 #include "util.h"
 
-#include "CloudXR.h"
+#include "CloudXRClient.h"
+#include "CloudXRInputEvents.h"
 #include "blitter.h"
-#include "CloudXRLaunchOptions.h"
+#include "CloudXRClientOptions.h"
 
 namespace hello_ar {
 namespace {
 const glm::vec3 kWhite = {255, 255, 255};
 }  // namespace
 
-class ARLaunchOptions : public CloudXR::LaunchOptions {
+class ARLaunchOptions : public CloudXR::ClientOptions {
 public:
     bool using_env_lighting_;
     float res_factor_;
 
+    bool hosting_cloud_anchor_ = false;
+    std::string cloud_anchor_id_;
+
     ARLaunchOptions() :
-      LaunchOptions(),
+      ClientOptions(),
       using_env_lighting_(true), // default ON
       // default to 0.75 reduced size, as many devices can't handle full throughput.
       // 0.75 chosen as WAR value for steamvr buffer-odd-size bug, works on galaxytab s6 + pixel 2
       res_factor_(0.75f)
-    { }
-
-protected:
-    // we override for extra cmdline options...
-    virtual void HandleArg(std::string &tok)
     {
-      if (tok == "-e" || tok == "-env-lighting") { // env lighting flag
-        GetNextToken(tok);
-        if (tok=="1") {
-          using_env_lighting_ = true;
-        }
-        else if (tok=="0") {
-          using_env_lighting_ = false;
-        }
-        // else leave as-is...
-      }
-      else if (tok == "-r" || tok == "-res-factor") { // resfactor override
-        GetNextToken(tok);
-        float factor = std::stof(tok);
-        if (factor >= 0.5f && factor <= 1.0f)
-          res_factor_ = factor;
-      }
-      else
-        LaunchOptions::HandleArg(tok);
+      AddOption("env-lighting", "e", true, "Send client environment lighting data to server.  1 enables, 0 disables.",
+                 HANDLER_LAMBDA_FN
+                 {
+                    if (tok=="1") {
+                      using_env_lighting_ = true;
+                    }
+                    else if (tok=="0") {
+                      using_env_lighting_ = false;
+                    }
+                    return ParseStatus_Success;
+                });
+      AddOption("res-factor", "r", true, "Adjust client resolution sent to server, reducing res by factor. Range [0.5-1.0].",
+                 HANDLER_LAMBDA_FN
+                 {
+                    float factor = std::stof(tok);
+                    if (factor >= 0.5f && factor <= 1.0f)
+                      res_factor_ = factor;
+                    return ParseStatus_Success;
+                 });
+      AddOption("cloud-anchor", "c", true, "Share recorded anchor data in google cloud. Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.",
+                 HANDLER_LAMBDA_FN
+                 {
+                    if (tok=="host") {
+                      hosting_cloud_anchor_ = true;
+                    } else {
+                      hosting_cloud_anchor_ = false;
+                      cloud_anchor_id_ = tok;
+                    }
+                    return ParseStatus_Success;
+                 });
     }
 };
 
-class HelloArApplication::CloudXRClient : public CloudXR::Client {
+class HelloArApplication::CloudXRClient {
  public:
-  ~CloudXRClient() override {
+  ~CloudXRClient() {
     Teardown();
   }
 
-  void TriggerHaptic(const CloudXR::HapticFeedback*) override {}
-  void RenderAudio(const CloudXR::AudioFrame*) override {}
-
-  void GetTrackingState(CloudXR::VRTrackingState* state) override {
+  void TriggerHaptic(const cxrHapticFeedback*) {}
+  void GetTrackingState(cxrVRTrackingState* state) {
     *state = {};
 
-    state->hmd.pose.bPoseIsValid = true;
-    state->hmd.pose.bDeviceIsConnected = true;
-    state->hmd.pose.eTrackingResult = CloudXR::TrackingResult_Running_OK;
+    state->hmd.pose.poseIsValid = cxrTrue;
+    state->hmd.pose.deviceIsConnected = cxrTrue;
+    state->hmd.pose.trackingResult = cxrTrackingResult_Running_OK;
 
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       const int idx = current_idx_ == 0 ?
           kQueueLen - 1 : (current_idx_ - 1)%kQueueLen;
-      state->hmd.pose.mDeviceToAbsoluteTracking = hmd_matrix_[idx];
+      state->hmd.pose.deviceToAbsoluteTracking = hmd_matrix_[idx];
     }
   }
 
-  CloudXR::HMDParams GetHMDParams() {
-    hmd_params_.width = stream_width_;
-    hmd_params_.height = stream_height_;
-    hmd_params_.maxRes = stream_max_res_;
-    hmd_params_.fps = static_cast<float>(fps_);
-    hmd_params_.ipd = 0.064f;
-    hmd_params_.predOffset = -0.02f;
-    hmd_params_.audio = 0;
-    hmd_params_.rightAlpha = 1;
+  cxrDeviceDesc GetDeviceDesc() {
+    device_desc_.deliveryType = cxrDeliveryType_Mono_RGBA;
+    device_desc_.width = stream_width_;
+    device_desc_.height = stream_height_;
+    device_desc_.maxResFactor = 1.0f; // leave alone, don't extra oversample on server.
+    device_desc_.fps = static_cast<float>(fps_);
+    device_desc_.ipd = 0.064f;
+    device_desc_.predOffset = -0.02f;
+    device_desc_.audio = 1;
+    device_desc_.disablePosePrediction = false;
+    device_desc_.angularVelocityInDeviceSpace = false;
 
-    return hmd_params_;
+    return device_desc_;
   }
 
   void Connect() {
@@ -136,34 +147,66 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
 
     LOGI("Connecting to CloudXR at %s...", launch_options_.mServerIP.c_str());
 
-    CloudXR::GraphicsContext context{CloudXR::GraphicsContext_GLES};
+    cxrGraphicsContext context{cxrGraphicsContext_GLES};
     context.egl.display = eglGetCurrentDisplay();
     context.egl.context = eglGetCurrentContext();
 
-    auto hmd_params = GetHMDParams();
+    auto device_desc = GetDeviceDesc();
 
-    if (CloudXR::CreateReceiver(launch_options_.mServerIP.c_str(), launch_options_.mLogLevel,
-        &hmd_params, this, &context, &cloudxr_receiver_) == CloudXR::Error_Success) {
-      // AR shouldn't have an arena, should it?  Maybe something large?
-      //LOGI("Setting default 1m radius arena boundary.", result);
-      //CloudXR::SetArenaBoundary(Receiver, 10.f, 0, 0);
+    cxrClientCallbacks clientProxy = { 0 };
+    clientProxy.GetTrackingState = [](void* context, cxrVRTrackingState* trackingState)
+    {
+        return reinterpret_cast<CloudXRClient*>(context)->GetTrackingState(trackingState);
+    };
+    clientProxy.TriggerHaptic = [](void* context, const cxrHapticFeedback* haptic)
+    {
+        return reinterpret_cast<CloudXRClient*>(context)->TriggerHaptic(haptic);
+    };
+
+    cxrReceiverDesc desc = { 0 };
+    desc.requestedVersion = CLOUDXR_VERSION_DWORD;
+    desc.deviceDesc = device_desc;
+    desc.clientCallbacks = clientProxy;
+    desc.clientContext = this;
+    desc.shareContext = &context;
+    desc.numStreams = 2;
+    desc.receiverMode = cxrStreamingMode_XR;
+    desc.debugFlags = launch_options_.mDebugFlags;
+    desc.logMaxSizeKB = CLOUDXR_LOG_MAX_DEFAULT;
+    desc.logMaxAgeDays = CLOUDXR_LOG_MAX_DEFAULT;
+    cxrError err = cxrCreateReceiver(&desc, &cloudxr_receiver_);
+    if (err != cxrError_Success)
+    {
+      LOGE("Failed to create CloudXR receiver. Error %d, %s.", err, cxrErrorString(err));
+      return; // err;
+    }
+    err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str());
+    if (err != cxrError_Success)
+    {
+      LOGE("Failed to connect to CloudXR server at %s. Error %d, %s.", launch_options_.mServerIP.c_str(), (int)err, cxrErrorString(err));
+      Teardown();
+      return; // err;
     }
 
-    if (!IsRunning())
-      Teardown();
+    // else, good to go.
+    LOGI("Receiver created!");
+
+    // AR shouldn't have an arena, should it?  Maybe something large?
+    //LOGI("Setting default 1m radius arena boundary.", result);
+    //cxrSetArenaBoundary(Receiver, 10.f, 0, 0);
   }
 
   void Teardown() {
     if (cloudxr_receiver_) {
       LOGI("Tearing down CloudXR...");
-      CloudXR::DestroyReceiver(cloudxr_receiver_);
+      cxrDestroyReceiver(cloudxr_receiver_);
     }
 
     cloudxr_receiver_ = nullptr;
   }
 
   bool IsRunning() const {
-    return cloudxr_receiver_ && CloudXR::IsRunning(cloudxr_receiver_);
+    return cloudxr_receiver_ && cxrIsRunning(cloudxr_receiver_);
   }
 
   void SetHMDMatrix(const glm::mat4& hmd_mat) {
@@ -198,27 +241,27 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
       const float b = -(1.f - projection[2][1])*oneOver11;
       const float t = 2.f*oneOver11 + b;
 
-      hmd_params_.proj[0][0] = l;
-      hmd_params_.proj[0][1] = r;
-      hmd_params_.proj[0][2] = -t;
-      hmd_params_.proj[0][3] = -b;
+      device_desc_.proj[0][0] = l;
+      device_desc_.proj[0][1] = r;
+      device_desc_.proj[0][2] = -t;
+      device_desc_.proj[0][3] = -b;
     } else {
       // Symmetric projection
-      hmd_params_.proj[0][0] = -1.f/projection[0][0];
-      hmd_params_.proj[0][1] = -hmd_params_.proj[0][0];
-      hmd_params_.proj[0][2] = -1.f/projection[1][1];
-      hmd_params_.proj[0][3] = -hmd_params_.proj[0][2];
+      device_desc_.proj[0][0] = -1.f/projection[0][0];
+      device_desc_.proj[0][1] = -device_desc_.proj[0][0];
+      device_desc_.proj[0][2] = -1.f/projection[1][1];
+      device_desc_.proj[0][3] = -device_desc_.proj[0][2];
     }
 
-    hmd_params_.proj[1][0] = hmd_params_.proj[0][0];
-    hmd_params_.proj[1][1] = hmd_params_.proj[0][1];
+    device_desc_.proj[1][0] = device_desc_.proj[0][0];
+    device_desc_.proj[1][1] = device_desc_.proj[0][1];
 
     // Disable right eye rendering
-    hmd_params_.proj[1][2] = 0;
-    hmd_params_.proj[1][3] = 0;
+    device_desc_.proj[1][2] = 0;
+    device_desc_.proj[1][3] = 0;
 
-    LOGI("Proj: %f %f %f %f", hmd_params_.proj[0][0], hmd_params_.proj[0][1],
-        hmd_params_.proj[0][2], hmd_params_.proj[0][3]);
+    LOGI("Proj: %f %f %f %f", device_desc_.proj[0][0], device_desc_.proj[0][1],
+        device_desc_.proj[0][2], device_desc_.proj[0][3]);
   }
 
   void SetFps(int fps) {
@@ -263,8 +306,8 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
 
     // Fetch the frame
     const uint32_t timeout_ms = 150;
-    const bool have_frame = CloudXR::LatchFrame(cloudxr_receiver_,
-        &frame_, timeout_ms) == CloudXR::Error_Success;
+    const bool have_frame = cxrLatchFrameXR(cloudxr_receiver_,
+        &frame_, timeout_ms) == cxrError_Success;
 
     if (!have_frame) {
       LOGI("CloudXR frame is not available!");
@@ -281,7 +324,7 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
       return;
     }
 
-    CloudXR::ReleaseFrame(cloudxr_receiver_, &frame_);
+    cxrReleaseFrameXR(cloudxr_receiver_, &frame_);
     latched_ = false;
   }
 
@@ -291,23 +334,25 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
     }
 
     blitter_.BlitTexture(0, 0, 0, 0, 0,
-        frame_.eyeTex[0], frame_.eyeTex[1], color_correction);
+        (uint32_t)frame_.eyeTexture[0].texture,
+        (uint32_t)frame_.eyeTexture[1].texture,
+        color_correction);
   }
 
   void UpdateLightProps(const float primaryDirection[3], const float primaryIntensity[3],
       const float ambient_spherical_harmonics[27]) {
-    CloudXR::LightProperties lightProperties;
+    cxrLightProperties lightProperties;
 
     for (uint32_t n = 0; n < 3; n++) {
       lightProperties.primaryLightColor.v[n] = primaryIntensity[n];
       lightProperties.primaryLightDirection.v[n] = primaryDirection[n];
     }
 
-    for (uint32_t n = 0; n < CloudXR::MAX_AMBIENT_LIGHT_SH*3; n++) {
+    for (uint32_t n = 0; n < CXR_MAX_AMBIENT_LIGHT_SH*3; n++) {
       lightProperties.ambientLightSh[n/3].v[n%3] = ambient_spherical_harmonics[n];
     }
 
-    CloudXR::SendLightProperties(cloudxr_receiver_, &lightProperties);
+    cxrSendLightProperties(cloudxr_receiver_, &lightProperties);
   }
 
 
@@ -328,8 +373,9 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
     return true;
   }
 
-  void SetServerAddr(std::string &ip) {
-    launch_options_.mServerIP = ip; // note we do no validation here!
+  void SetArgs(const std::string &args) {
+    LOGI("App args: %s.", args.c_str());
+    launch_options_.ParseString(args);
   }
 
   std::string GetServerAddr() {
@@ -343,38 +389,50 @@ class HelloArApplication::CloudXRClient : public CloudXR::Client {
   // this is used to tell the client what the display/surface resolution is.
   // here, we can apply a factor to reduce what we tell the server our desired
   // video resolution should be.
-  void SetStreamRes(uint32_t w, uint32_t h) {
-      if (w>h) { // we want width to be smaller dimension, i.e. 'portrait' oriented.  inline swap.
-          uint32_t temp = w;
-          w = h;
-          h = temp;
+  void SetStreamRes(uint32_t w, uint32_t h, uint32_t orientation) {
+      // in portrait modes we want width to be smaller dimension
+      if (w > h && (orientation == 0 || orientation == 2)) {
+          std::swap(w, h);
       }
       // apply the res factor to width and height, and make sure they are even for stream res.
       stream_width_ = ((uint32_t)round((float)w * launch_options_.res_factor_)) & ~1;
       stream_height_ = ((uint32_t)round((float)h * launch_options_.res_factor_)) & ~1;
-      // set max res to be stream height (larger dimension), but clamp to 2048.
-      stream_max_res_ = (stream_height_ > 2048) ? 2048 : stream_height_;
       LOGI("SetStreamRes: Display res passed = %dx%d", w, h);
-      LOGI("SetStreamRes: Stream res set = %dx%d [max %d]", stream_width_, stream_height_, stream_max_res_);
+      LOGI("SetStreamRes: Stream res set = %dx%d [max %d]", stream_width_, stream_height_);
+  }
+
+  // Send a touch event along to the server/host application
+  void HandleTouch(float x, float y) {
+    if (!IsRunning()) return;
+
+    cxrInputEvent input;
+    input.type = cxrInputEventType_Touch;
+    input.event.touchEvent.type = cxrTouchEventType_FINGERUP;
+    input.event.touchEvent.x = x;
+    input.event.touchEvent.y = y;
+    cxrSendInputEvent(cloudxr_receiver_, &input);
+  }
+
+  const ARLaunchOptions& GetLaunchOptions() {
+    return launch_options_;
   }
 
 private:
   static constexpr int kQueueLen = BackgroundRenderer::kQueueLen;
 
-  CloudXR::Receiver* cloudxr_receiver_ = nullptr;
+  cxrReceiverHandle cloudxr_receiver_ = nullptr;
 
   ARLaunchOptions launch_options_;
 
   uint32_t stream_width_ = 720;
   uint32_t stream_height_ = 1440;
-  uint32_t stream_max_res_ = 1440;
 
-  CloudXR::VideoFrame frame_ = {};
+  cxrVideoFrameXR frame_ = {};
   bool latched_ = false;
 
   std::mutex state_mutex_;
-  CloudXR::HmdMatrix34 hmd_matrix_[kQueueLen] = {};
-  CloudXR::HMDParams hmd_params_ = {};
+  cxrMatrix34 hmd_matrix_[kQueueLen] = {};
+  cxrDeviceDesc device_desc_ = {};
   int current_idx_ = 0;
 
   Blitter blitter_;
@@ -409,16 +467,15 @@ void HelloArApplication::HandleLaunchOptions(std::string &cmdline) {
   cloudxr_client_->HandleLaunchOptions(cmdline);
 }
 
-// pass server address direct to client.
-void HelloArApplication::SetServerIp(std::string &ip) {
-  cloudxr_client_->SetServerAddr(ip);
+// pass command line args direct to client.
+void HelloArApplication::SetArgs(const std::string &args) {
+  cloudxr_client_->SetArgs(args);
 }
 
 // pass server address direct to client.
 std::string HelloArApplication::GetServerIp() {
   return cloudxr_client_->GetServerAddr();
 }
-
 
 void HelloArApplication::OnPause() {
   LOGI("OnPause()");
@@ -495,16 +552,60 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
 
     ArCameraConfigList_destroy(all_camera_configs);
 
-    if (cloudxr_client_->GetUseEnvLighting()) {
+    ArAugmentedImageDatabase* ar_augmented_image_database = nullptr;
+
+    if (FILE* f = fopen("/sdcard/image_anchors.imgdb", "rb"))
+    {
+      LOGI("Image anchors DB found.");
+
+      fseek(f, 0, SEEK_END);
+      size_t db_size = ftell(f);
+      fseek(f, 0, SEEK_SET);
+
+      uint8_t* raw_buffer = new uint8_t[db_size];
+      fread(raw_buffer, 1, db_size, f);
+      fclose(f);
+
+      const ArStatus status = ArAugmentedImageDatabase_deserialize(
+          ar_session_, raw_buffer, db_size, &ar_augmented_image_database);
+
+      if (status != AR_SUCCESS) {
+        LOGI("Unable to deserialize image anchors DB!");
+      }
+
+      delete [] raw_buffer;
+    }
+
       ArConfig* config = nullptr;
       ArConfig_create(ar_session_, &config);
       ArSession_getConfig(ar_session_, config);
+
+    if (cloudxr_client_->GetUseEnvLighting()) {
       ArConfig_setLightEstimationMode(ar_session_, config,
           AR_LIGHT_ESTIMATION_MODE_ENVIRONMENTAL_HDR);
+    }
+
+    if (ar_augmented_image_database) {
+      ArConfig_setAugmentedImageDatabase(ar_session_, config,
+                                         ar_augmented_image_database);
+      using_image_anchors_ = true;
+      LOGI("Using image anchors.");
+
+      ArAugmentedImageDatabase_destroy(ar_augmented_image_database);
+    }
+
+    // Enable cloud anchors when necessary
+    if (cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_ ||
+        !cloudxr_client_->GetLaunchOptions().cloud_anchor_id_.empty())
+    {
+      ArConfig_setCloudAnchorMode(ar_session_, config,
+          AR_CLOUD_ANCHOR_MODE_ENABLED);
+      LOGI("Enabling cloud anchors.");
+    }
+
       ArSession_configure(ar_session_, config);
       ArConfig_destroy(config);
     }
-  }
 
   ArCameraIntrinsics_create(ar_session_, &ar_camera_intrinsics_);
 
@@ -530,7 +631,7 @@ void HelloArApplication::OnSurfaceCreated() {
 
 void HelloArApplication::OnDisplayGeometryChanged(int display_rotation,
                                                   int width, int height) {
-  LOGI("OnSurfaceChanged(%d, %d)", width, height);
+  LOGI("OnSurfaceChanged(%d, %d, %d)", display_rotation, width, height);
   glViewport(0, 0, width, height);
   display_rotation_ = display_rotation;
   display_width_ = width;
@@ -538,12 +639,156 @@ void HelloArApplication::OnDisplayGeometryChanged(int display_rotation,
   if (ar_session_ != nullptr) {
     ArSession_setDisplayGeometry(ar_session_, display_rotation, width, height);
   }
-  cloudxr_client_->SetStreamRes(display_width_, display_height_); // TODO TBD should we pre-rotate?
+  cloudxr_client_->SetStreamRes(display_width_, display_height_, display_rotation);
 }
 
+void HelloArApplication::UpdateImageAnchors() {
+  if (!using_image_anchors_)
+    return;
+
+  ArTrackableList* updated_image_list = nullptr;
+  ArTrackableList_create(ar_session_, &updated_image_list);
+  CHECK(updated_image_list != nullptr);
+  ArFrame_getUpdatedTrackables(
+      ar_session_, ar_frame_, AR_TRACKABLE_AUGMENTED_IMAGE, updated_image_list);
+
+  int32_t image_list_size;
+  ArTrackableList_getSize(ar_session_, updated_image_list, &image_list_size);
+
+  // Find newly detected image, add it to map
+  for (int i = 0; i < image_list_size; ++i) {
+    ArTrackable* ar_trackable = nullptr;
+    ArTrackableList_acquireItem(ar_session_, updated_image_list, i,
+                                &ar_trackable);
+    ArAugmentedImage* image = ArAsAugmentedImage(ar_trackable);
+
+    ArTrackingState tracking_state;
+    ArTrackable_getTrackingState(ar_session_, ar_trackable, &tracking_state);
+
+    int image_index;
+    ArAugmentedImage_getIndex(ar_session_, image, &image_index);
+
+    switch (tracking_state) {
+      case AR_TRACKING_STATE_PAUSED:
+        // When an image is in PAUSED state but the camera is not PAUSED,
+        // that means the image has been detected but not yet tracked.
+        LOGI("Detected Image %d", image_index);
+        break;
+      case AR_TRACKING_STATE_TRACKING:
+        if (augmented_image_map.find(image_index) ==
+            augmented_image_map.end()) {
+          // Record the image and its anchor.
+          util::ScopedArPose scopedArPose(ar_session_);
+          ArAugmentedImage_getCenterPose(ar_session_, image,
+                                         scopedArPose.GetArPose());
+
+          ArAnchor* image_anchor = nullptr;
+          const ArStatus status = ArTrackable_acquireNewAnchor(
+              ar_session_, ar_trackable, scopedArPose.GetArPose(),
+              &image_anchor);
+          CHECK(status == AR_SUCCESS);
+
+          // Now we have an Anchor, record this image.
+          augmented_image_map[image_index] =
+              std::pair<ArAugmentedImage*, ArAnchor*>(image, image_anchor);
+        }
+        break;
+
+      case AR_TRACKING_STATE_STOPPED: {
+        std::pair<ArAugmentedImage*, ArAnchor*> record =
+            augmented_image_map[image_index];
+        ArTrackable_release(ArAsTrackable(record.first));
+        ArAnchor_release(record.second);
+        augmented_image_map.erase(image_index);
+      } break;
+
+      default:
+        break;
+    }  // End of switch (tracking_state)
+  }    // End of for (int i = 0; i < image_list_size; ++i) {
+
+  ArTrackableList_destroy(updated_image_list);
+  updated_image_list = nullptr;
+
+  if (!base_frame_calibrated_ && !augmented_image_map.empty()) {
+    anchor_ = augmented_image_map.begin()->second.second;
+    base_frame_calibrated_ = true;
+  }
+}
+
+void HelloArApplication::UpdateCloudAnchor() {
+  if (using_image_anchors_)
+    return;
+
+  const auto& launch_options = cloudxr_client_->GetLaunchOptions();
+
+  if (!launch_options.hosting_cloud_anchor_ &&
+      launch_options.cloud_anchor_id_.empty()) {
+    return;
+  }
+
+  // Lazy creation
+  if (launch_options.hosting_cloud_anchor_ && base_frame_calibrated_ &&
+      nullptr != anchor_ && nullptr == cloud_anchor_) {
+
+    ArTrackingState tracking_state = AR_TRACKING_STATE_STOPPED;
+    ArAnchor_getTrackingState(ar_session_, anchor_, &tracking_state);
+
+    if (tracking_state == AR_TRACKING_STATE_TRACKING) {
+      if (auto status = ArSession_hostAndAcquireNewCloudAnchor(ar_session_,
+          anchor_, &cloud_anchor_)) {
+        LOGE("Cloud anchor hosting failed with %d.", status);
+      }
+    }
+  } else if (!launch_options.cloud_anchor_id_.empty() &&
+      (nullptr == anchor_ || !base_frame_calibrated_)) {
+    if (auto status = ArSession_resolveAndAcquireNewCloudAnchor(ar_session_,
+        launch_options.cloud_anchor_id_.c_str(), &anchor_)) {
+      LOGE("Cloud anchor resolve failed with %d.", status);
+    } else {
+      LOGI("Cloud anchor \"%s\" resolved!",
+          launch_options.cloud_anchor_id_.c_str());
+
+      base_frame_calibrated_ = true;
+      cloud_anchor_ = anchor_;
+    }
+  }
+
+  // Grab state
+  ArCloudAnchorState state = AR_CLOUD_ANCHOR_STATE_NONE;
+  if (nullptr != cloud_anchor_) {
+    ArAnchor_getCloudAnchorState(ar_session_, cloud_anchor_, &state);
+  } else {
+    // No cloud anchor around - bail
+    return;
+  }
+
+  if (state != AR_CLOUD_ANCHOR_STATE_SUCCESS) {
+    if (state == AR_CLOUD_ANCHOR_STATE_TASK_IN_PROGRESS) {
+      LOGI("Cloud anchor in progress...");
+    } else if (state >= AR_CLOUD_ANCHOR_STATE_ERROR_INTERNAL) {
+      LOGE("Cloud anchor error state %d.", state);
+    }
+    return;
+  }
+
+  // Get hosted id and report
+  // TODO(iterentiev): find a better way to report
+  if (launch_options.hosting_cloud_anchor_ && nullptr != cloud_anchor_) {
+    char* cloud_anchor_id = nullptr;
+    ArAnchor_acquireCloudAnchorId(ar_session_, cloud_anchor_,
+        &cloud_anchor_id);
+
+    LOGI("Hosted cloud anchor id: %s.", cloud_anchor_id);
+
+    ArString_release(cloud_anchor_id);
+  }
+}
+
+// Render the scene.
 void HelloArApplication::OnDrawFrame() {
-  // Render the scene.
-  glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+  // clearing to dark red to start, so it is obvious if we fail out early or don't render anything
+  glClearColor(0.3f, 0.0f, 0.0f, 1.0f);
   glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 
   glEnable(GL_CULL_FACE);
@@ -588,6 +833,33 @@ void HelloArApplication::OnDrawFrame() {
 
   // If the camera isn't tracking don't bother rendering other objects.
   if (camera_tracking_state != AR_TRACKING_STATE_TRACKING) {
+    if (camera_tracking_state == AR_TRACKING_STATE_STOPPED)
+    {
+      LOGI("Note camera tracking is in STOPPED state.");
+    }
+    else
+    { // camera is paused state
+      LOGI("Note camera tracking is PAUSED.");
+      ArTrackingFailureReason reason;
+      ArCamera_getTrackingFailureReason(ar_session_, ar_camera, &reason);
+      switch(reason)
+      {
+          case AR_TRACKING_FAILURE_REASON_NONE:
+              break;
+          case AR_TRACKING_FAILURE_REASON_BAD_STATE:
+              LOGE("Camera tracking lost due to bad internal state.");
+              break;
+          case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_LIGHT:
+              LOGE("Camera tracking lost due to insufficient lighting.  Please move to brighter area.");
+              break;
+          case AR_TRACKING_FAILURE_REASON_EXCESSIVE_MOTION:
+              LOGE("Camera tracking lost due to excessive motion.  Please move more slowly.");
+              break;
+          case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_FEATURES:
+              LOGE("Camera tracking lost due to insufficient visual features to track.  Move to area with more surface details.");
+              break;
+      }
+    }
     return;
   }
 
@@ -598,7 +870,11 @@ void HelloArApplication::OnDrawFrame() {
       cloudxr_client_->Release();
   }
 
-  if (base_frame_calibrated_) {
+  UpdateImageAnchors();
+  UpdateCloudAnchor();
+
+  if (base_frame_calibrated_ &&
+      !cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_) {
     // Try fetch base frame
     if (using_dynamic_base_frame_ && anchor_) {
       ArTrackingState tracking_state = AR_TRACKING_STATE_STOPPED;
@@ -678,8 +954,10 @@ void HelloArApplication::OnDrawFrame() {
   }
 
   // Calibrate base frame only when neccessary
-  if (base_frame_calibrated_)
+  if (!cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_ &&
+      (base_frame_calibrated_ || using_image_anchors_)) {
     return;
+  }
 
   // Try fetch zero basis
   if (anchor_) {
@@ -729,6 +1007,7 @@ void HelloArApplication::OnDrawFrame() {
     }
 
     if (ArTrackingState::AR_TRACKING_STATE_TRACKING != out_tracking_state) {
+      LOGE("Tracked plane lost, skipping drawing.");
       continue;
     }
 
@@ -747,10 +1026,18 @@ void HelloArApplication::OnDrawFrame() {
 }
 
 void HelloArApplication::OnTouched(float x, float y, bool longPress) {
-  // Do not do anything if base frame is calibrated and user
-  // does not want to reset it
-  if (base_frame_calibrated_ && !longPress)
+  // if base frame is calibrated and user is not asking to reset, pass touches to server
+  if (base_frame_calibrated_ && !longPress) {
+    if (cloudxr_client_->IsRunning())
+      cloudxr_client_->HandleTouch(x, y);
+    return;  // TODO: should return true/false for handled/used the event...
+  }
+
+  // Do not ever recalibrate when hosting an anchor
+  if (base_frame_calibrated_ &&
+      cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_) {
     return;
+  }
 
   // Reset calibration on a long press
   if (longPress) {

@@ -27,31 +27,38 @@ import android.app.AlertDialog;
 import android.widget.EditText;
 import android.util.Patterns;
 import android.content.DialogInterface;
-import android.widget.Toast;
+import android.widget.*;
+import android.view.*;
 
 // Adapted from https://twigstechtips.blogspot.com/2011/10/android-allow-user-to-editinput-text.html
 public class ServerIPDialog {
-  public static void show(HelloArActivity activity, String prevIp) {
+  public static void show(HelloArActivity activity, String prevIp, String prevCloudAnchor) {
     final HelloArActivity thiz = activity;
-    final EditText serverIp = new EditText(activity);
+
+    final View startupDialog = thiz.getLayoutInflater().inflate(R.layout.startup_dialog, null);
+    final EditText serverIp = startupDialog.findViewById(R.id.server_ip);
+    final EditText cloudAnchorId = startupDialog.findViewById(R.id.cloud_anchor_id);
+    final CheckBox hostCloudAnchor = startupDialog.findViewById(R.id.host_cloud_anchor_checkbox);
+
+    cloudAnchorId.setText(prevCloudAnchor);
 
     serverIp.setHint("127.0.0.1");
     serverIp.setText(prevIp);
 
     new AlertDialog.Builder(activity)
-        .setTitle("CloudXR Server IP")
-        .setMessage("Please enter CloudXR server IP address.")
-        .setView(serverIp)
+        .setTitle("CloudXR Options")
+        .setMessage("")
+        .setView(startupDialog)
         .setPositiveButton("Go", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             String ip = serverIp.getText().toString();
 
             if (Patterns.IP_ADDRESS.matcher(ip).matches()) {
-                thiz.setServerIp(ip);
+                thiz.setParams(ip, cloudAnchorId.getText().toString(), hostCloudAnchor.isChecked());
                 thiz.doResume();
             } else {
               Toast.makeText(thiz, "Invalid IP address. Try again.", Toast.LENGTH_SHORT).show();
-              ServerIPDialog.show(thiz, prevIp);
+              ServerIPDialog.show(thiz, prevIp, prevCloudAnchor);
             }
           }
         })

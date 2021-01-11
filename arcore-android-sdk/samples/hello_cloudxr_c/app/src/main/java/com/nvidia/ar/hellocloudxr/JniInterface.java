@@ -63,7 +63,7 @@ public class JniInterface {
 
   public static native void handleLaunchOptions(long nativeApplication, String cmdline);
 
-  public static native void setServerIp(long nativeApplication, String ip);
+  public static native void setArgs(long nativeApplication, String args);
   public static native String getServerIp(long nativeApplication);
 
   public static native void onResume(long nativeApplication, Context context, Activity activity);

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+          android:orientation="vertical"
+          android:layout_width="match_parent"
+          android:layout_height="match_parent">
+
+<TextView
+        android:id="@+id/server_ip_view"
+        android:layout_height="wrap_content"
+        android:layout_width="wrap_content"
+        android:text="@string/server_ip_str" />
+
+<EditText
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:id="@+id/server_ip"/>
+
+<TextView
+        android:id="@+id/cloud_anchor_id_view"
+        android:layout_height="wrap_content"
+        android:layout_width="wrap_content"
+        android:text="@string/cloud_anchor_id_str" />
+
+<EditText
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:id="@+id/cloud_anchor_id"/>
+
+<CheckBox
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/host_cloud_anchor_str"
+        android:id="@+id/host_cloud_anchor_checkbox"
+        android:layout_gravity="left|center_vertical"
+        android:checked="false"/>
+
+</LinearLayout>

@@ -71,6 +71,7 @@ public class HelloArActivity extends AppCompatActivity
 
   SharedPreferences prefs = null;
   final String ipAddrPref = "cxr_last_server_ip_addr";
+  final String cloudAnchorPref = "cxr_last_cloud_anchor";
 
   private GLSurfaceView surfaceView;
   private String cmdlineFromIntent = "";
@@ -160,12 +161,14 @@ public class HelloArActivity extends AppCompatActivity
     planeStatusCheckingHandler = new Handler();
   }
 
-  public void setServerIp(String ip) {
+  public void setParams(String ip, String cloudAnchorId, boolean hostCloudAnchor) {
     SharedPreferences.Editor prefedit = prefs.edit();
     prefedit.putString(ipAddrPref, ip);
+    prefedit.putString(cloudAnchorPref, cloudAnchorId);
     prefedit.commit();
 
-    JniInterface.setServerIp(nativeApplication, ip);
+    JniInterface.setArgs(nativeApplication, "-s " + ip + " -c " +
+        (hostCloudAnchor ? "host" : cloudAnchorId));
   }
 
   public void doResume() {
@@ -199,7 +202,8 @@ public class HelloArActivity extends AppCompatActivity
       String jniIpAddr = JniInterface.getServerIp(nativeApplication);
       if (jniIpAddr.isEmpty()) {
           String prevIP = prefs.getString(ipAddrPref, "");
-          ServerIPDialog.show(this, prevIP);
+          String prevCloudAnchor = prefs.getString(cloudAnchorPref, "");
+          ServerIPDialog.show(this, prevIP, prevCloudAnchor);
       } else {
           doResume();
       }

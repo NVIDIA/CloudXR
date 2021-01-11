@@ -66,7 +66,7 @@ class HelloArApplication {
 
   bool Init();
   void HandleLaunchOptions(std::string &cmdline);
-  void SetServerIp(std::string &ip);
+  void SetArgs(const std::string &args);
   std::string GetServerIp();
 
   // OnPause is called on the UI thread from the Activity's onPause method.
@@ -98,13 +98,19 @@ class HelloArApplication {
 
   // Returns true if any planes have been detected.  Used for hiding the
   // "searching for planes" snackbar.
-  bool HasDetectedPlanes() const { return plane_count_ > 0; }
+  bool HasDetectedPlanes() const {
+    return plane_count_ > 0 || using_image_anchors_ || base_frame_calibrated_;
+  }
 
  private:
+  void UpdateImageAnchors();
+  void UpdateCloudAnchor();
+
   ArSession* ar_session_ = nullptr;
   ArFrame* ar_frame_ = nullptr;
   ArCameraIntrinsics* ar_camera_intrinsics_ = nullptr;
   ArAnchor* anchor_ = nullptr;
+  ArAnchor* cloud_anchor_ = nullptr;
 
   bool install_requested_ = false;
   int display_width_ = 1;
@@ -112,6 +118,10 @@ class HelloArApplication {
   int display_rotation_ = 0;
   int cam_image_width_ = 1920;
   int cam_image_height_ = 1080;
+
+  bool using_image_anchors_ = false;
+  std::unordered_map<int32_t, std::pair<ArAugmentedImage*, ArAnchor*>>
+      augmented_image_map;
 
   bool using_dynamic_base_frame_ = true;
   bool base_frame_calibrated_ = false;

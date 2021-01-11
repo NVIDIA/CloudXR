@@ -104,14 +104,13 @@ JNI_METHOD(void, handleLaunchOptions)
     native(native_application)->HandleLaunchOptions(cmdline);
 }
 
-JNI_METHOD(void, setServerIp)
-(JNIEnv *env, jclass, jlong native_application, jstring jip) {
-  if (jip != nullptr) {
-    const char *ip = env->GetStringUTFChars(jip, nullptr);
-    if (ip != nullptr) {
-      std::string sip = ip;
-      native(native_application)->SetServerIp(sip);
-      env->ReleaseStringUTFChars(jip, ip);
+JNI_METHOD(void, setArgs)
+(JNIEnv *env, jclass, jlong native_application, jstring jargs) {
+  if (jargs != nullptr) {
+    const char *args = env->GetStringUTFChars(jargs, nullptr);
+    if (args != nullptr) {
+      native(native_application)->SetArgs(args);
+      env->ReleaseStringUTFChars(jargs, args);
     }
   }
 }
