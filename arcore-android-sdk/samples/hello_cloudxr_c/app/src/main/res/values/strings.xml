@@ -16,4 +16,7 @@
 -->
 <resources>
   <string name="app_name">CloudXR ARCore Client</string>
+  <string name="host_cloud_anchor_str">Host a cloud anchor</string>
+  <string name="cloud_anchor_id_str">Cloud anchor id:</string>
+  <string name="server_ip_str">Enter CloudXR server IP Address:</string>
 </resources>
