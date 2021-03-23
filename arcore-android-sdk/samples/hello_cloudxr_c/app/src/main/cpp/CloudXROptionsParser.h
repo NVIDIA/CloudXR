@@ -163,7 +163,9 @@ public:
             if (args.find(tok) == args.end())
             {
                 std::cout << "Unknown argument " << tok << '\n';
-                return ParseStatus_Fail;
+                //return ParseStatus_Fail;
+                // instead of failing, let's continue so bad params don't abort processing.
+                continue;
             }
 
             // lowercase the token to eliminate case testing issues for option names.

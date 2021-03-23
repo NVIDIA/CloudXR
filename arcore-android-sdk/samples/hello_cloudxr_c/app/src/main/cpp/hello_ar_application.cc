@@ -71,7 +71,7 @@ public:
       // 0.75 chosen as WAR value for steamvr buffer-odd-size bug, works on galaxytab s6 + pixel 2
       res_factor_(0.75f)
     {
-      AddOption("env-lighting", "e", true, "Send client environment lighting data to server.  1 enables, 0 disables.",
+      AddOption("env-lighting", "el", true, "Send client environment lighting data to server.  1 enables, 0 disables.",
                  HANDLER_LAMBDA_FN
                  {
                     if (tok=="1") {
@@ -82,15 +82,16 @@ public:
                     }
                     return ParseStatus_Success;
                 });
-      AddOption("res-factor", "r", true, "Adjust client resolution sent to server, reducing res by factor. Range [0.5-1.0].",
+      AddOption("res-factor", "rf", true, "Adjust client resolution sent to server, reducing res by factor. Range [0.5-1.0].",
                  HANDLER_LAMBDA_FN
                  {
                     float factor = std::stof(tok);
                     if (factor >= 0.5f && factor <= 1.0f)
                       res_factor_ = factor;
+                    LOGI("Resolution factor = %0.2f", res_factor_);
                     return ParseStatus_Success;
                  });
-      AddOption("cloud-anchor", "c", true, "Share recorded anchor data in google cloud. Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.",
+      AddOption("cloud-anchor", "ca", true, "Share recorded anchor data in google cloud. Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.",
                  HANDLER_LAMBDA_FN
                  {
                     if (tok=="host") {
@@ -364,6 +365,7 @@ class HelloArApplication::CloudXRClient {
     // first, try to read "command line in a text file"
     launch_options_.ParseFile("/sdcard/CloudXRLaunchOptions.txt");
     // next, process actual 'commandline' args -- overrides any prior values
+    LOGI("Parsing commandline string: %s", cmdline.c_str());
     launch_options_.ParseString(cmdline);
 
     // we log error here if no server (if have no 'input UI', we have no other source)
@@ -390,15 +392,16 @@ class HelloArApplication::CloudXRClient {
   // here, we can apply a factor to reduce what we tell the server our desired
   // video resolution should be.
   void SetStreamRes(uint32_t w, uint32_t h, uint32_t orientation) {
-      // in portrait modes we want width to be smaller dimension
-      if (w > h && (orientation == 0 || orientation == 2)) {
-          std::swap(w, h);
-      }
-      // apply the res factor to width and height, and make sure they are even for stream res.
-      stream_width_ = ((uint32_t)round((float)w * launch_options_.res_factor_)) & ~1;
-      stream_height_ = ((uint32_t)round((float)h * launch_options_.res_factor_)) & ~1;
-      LOGI("SetStreamRes: Display res passed = %dx%d", w, h);
-      LOGI("SetStreamRes: Stream res set = %dx%d [max %d]", stream_width_, stream_height_);
+    // in portrait modes we want width to be smaller dimension
+    if (w > h && (orientation == 0 || orientation == 2)) {
+      std::swap(w, h);
+    }
+
+    // apply the res factor to width and height, and make sure they are even for stream res.
+    stream_width_ = ((uint32_t)round((float)w * launch_options_.res_factor_)) & ~1;
+    stream_height_ = ((uint32_t)round((float)h * launch_options_.res_factor_)) & ~1;
+    LOGI("SetStreamRes: Display res passed = %dx%d", w, h);
+    LOGI("SetStreamRes: Stream res set = %dx%d [factor %0.2f]", stream_width_, stream_height_, launch_options_.res_factor_);
   }
 
   // Send a touch event along to the server/host application
@@ -631,7 +634,7 @@ void HelloArApplication::OnSurfaceCreated() {
 
 void HelloArApplication::OnDisplayGeometryChanged(int display_rotation,
                                                   int width, int height) {
-  LOGI("OnSurfaceChanged(%d, %d, %d)", display_rotation, width, height);
+  LOGI("OnDisplayGeometryChanged(%d, %d, %d)", display_rotation, width, height);
   glViewport(0, 0, width, height);
   display_rotation_ = display_rotation;
   display_width_ = width;

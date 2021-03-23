@@ -5,9 +5,10 @@ NVIDIA CloudXR sample application for ARCore. Heavily based on hello_ar_c ARCore
 
 Prerequisites
 ----------------------
-* Android Studio v4 or later. [Link](https://developer.android.com/studio)
-  * (optional) A fully setup Android development environment with Android SDK, Android NDK and Android Platform Tools and OpenJDK 1.8
-* CloudXR 2.0 SDK Release
+* Android Studio v4.0 or later. [Link](https://developer.android.com/studio)
+  * (optional) A fully setup Android development environment with Android SDK, Android NDK, and Android Platform Tools and OpenJDK 1.8
+* Base required version of tools: Android SDK 25, NDK 21.4.7075529, Build tools 28.0.3, Gradle 6.1.1, and Gradle android plugin 3.6.4.
+* CloudXR 2.1 SDK Release
 
 Building with Android Studio
 ----------------------
@@ -53,24 +54,21 @@ Optional
     * via MTP just drag and drop to root
     * or using ADB:
         * adb push CloudXRLaunchOptions.txt /sdcard/CloudXRLaunchOptions.txt
-* If started from Android Studio, in Run/Debug Configurations you can set server in Launch Flags, using:
+* If started from Android Studio, in Run/Debug Configurations you can specify command line arguments in Launch Flags, using:
     * --es args "-s [server ip]"
 * Other launch options you can specify in text file or launch flags include:
     * -v
         * Enables more verbose logging
-    * -q
-        * Quiets all logging
-    * -r [factor]
-        * Allows adjusting the target stream resolution as a factor of display resolution.
+    * -rf [factor]
+        * Allows reducing video stream resolution to a factor of display resolution.
         * The default value is 0.75, so default stream res will be 0.75 * (device res).
         * The allowed range for factor is 0.5 to 1.0 multiplier.
-    * -e [1|0]
+    * -el [on|off]
         * Enable/disable environmental lighting support.
-        * Default is on/1, if performance issues try turning off.
-    * -c [host|{ANCHOR-ID}]
-        * Enables cloud anchor hosting
-        * use 'host' to record anchors to the cloud.  in the log you'll see the anchor ID for your session, which can be shared.
-        * use a cloud saved anchor ID to load a shared anchor set from the cloud.
+        * Default is on, if performance issues try turning off.
+    * -ca [host|<cloud anchor ID>]
+        * Enable sharing recorded anchor data via Google ARCore Cloud Anchor support
+        * Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.
 
 License
 ----------------------
