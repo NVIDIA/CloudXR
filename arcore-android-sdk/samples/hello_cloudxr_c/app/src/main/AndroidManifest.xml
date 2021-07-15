@@ -21,11 +21,13 @@
   <uses-permission android:name="android.permission.CAMERA"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
   <!-- This tag indicates that this application requires ARCore.  This results in the application
        only being visible in the Google Play Store on devices that support ARCore. -->
   <uses-feature android:name="android.hardware.camera.ar" android:required="true"/>
   <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+  <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
   <application
     android:allowBackup="true"

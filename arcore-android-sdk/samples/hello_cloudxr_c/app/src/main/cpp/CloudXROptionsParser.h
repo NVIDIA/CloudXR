@@ -41,6 +41,7 @@ typedef enum
     ParseStatus_Fail,
     ParseStatus_ExitRequested,
     ParseStatus_BadVal,
+    ParseStatus_FileNotFound
 } ParseStatus;
 
 namespace CloudXR {
@@ -121,7 +122,7 @@ public:
 
     ParseStatus ParseFile(const char* path)
     {
-        ParseStatus status = ParseStatus_Success;
+        ParseStatus status = ParseStatus_FileNotFound;
         std::ifstream clifs(path);
         if (!clifs.fail()) {
             mStream = &clifs;

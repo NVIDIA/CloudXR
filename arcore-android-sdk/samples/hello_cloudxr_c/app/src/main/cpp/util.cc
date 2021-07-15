@@ -31,7 +31,7 @@ void CheckGlError(const char* operation) {
     anyError = true;
   }
   if (anyError) {
-    abort();
+//    abort();
   }
 }
 

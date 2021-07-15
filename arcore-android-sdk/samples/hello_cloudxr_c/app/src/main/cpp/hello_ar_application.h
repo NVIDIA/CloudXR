@@ -88,7 +88,8 @@ class HelloArApplication {
   void OnDisplayGeometryChanged(int display_rotation, int width, int height);
 
   // OnDrawFrame is called on the OpenGL thread to render the next frame.
-  void OnDrawFrame();
+  // @return int: error status.
+  int OnDrawFrame();
 
   // OnTouched is called on the OpenGL thread after the user touches the screen.
   // @param x: x position on the screen (pixels).
@@ -105,6 +106,8 @@ class HelloArApplication {
  private:
   void UpdateImageAnchors();
   void UpdateCloudAnchor();
+
+  static bool exiting_;
 
   ArSession* ar_session_ = nullptr;
   ArFrame* ar_frame_ = nullptr;

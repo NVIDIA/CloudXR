@@ -42,6 +42,9 @@ public:
     bool mWindowed;
     bool mBtnRemap;
     bool mTestLatency;
+    bool mEnableAlpha;
+    bool mSendAudio;
+    bool mReceiveAudio;
     float mMaxResFactor;
     int32_t mLogMaxAgeDays;
     int32_t mLogMaxSizeKB;
@@ -49,7 +52,7 @@ public:
     uint32_t mReceiverMode;
     uint32_t mDebugFlags;
     int32_t mFoveation;
-    std::string gfxType; // TODO: this should be an enum not a raw string.  And only for win/linux, not android/ios?
+    cxrGraphicsContextType mGfxType;
     std::string mUserData;
 
     ClientOptions() :
@@ -57,25 +60,29 @@ public:
             mWindowed(false),
             mBtnRemap(true),
             mTestLatency(false),
-            mFoveation(0),
+            mEnableAlpha(false),
+            mSendAudio(false),
+            mReceiveAudio(true),
             mMaxResFactor(1.2f),
             mLogMaxAgeDays(-1),
             mLogMaxSizeKB(-1),
             mNumVideoStreams(CXR_NUM_VIDEO_STREAMS_XR),
             mReceiverMode(cxrStreamingMode_XR),
             mDebugFlags(0),
+            mFoveation(0),
 #ifdef _WIN32
-            gfxType("d3d11")
+            mGfxType(cxrGraphicsContext_D3D11)
 #elif defined(__linux__)
 #ifdef __aarch64__
-           gfxType("gles")
+            mGfxType(cxrGraphicsContext_GLES)
 #else
-           gfxType("cuda")
+            mGfxType(cxrGraphicsContext_Cuda)
 #endif
 #endif
     {
         AddOption("server", "s", true, "IP address of server to connect to",
                   HANDLER_LAMBDA_FN {mServerIP = tok; return ParseStatus_Success;});
+                  
         AddOption("log-verbose", "v", false, "Enable more verbose logging",
                   HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_LogVerbose; return ParseStatus_Success;});
         AddOption("log-quiet", "q", false, "Disable logging to file, use only debug output",
@@ -88,12 +95,25 @@ public:
                   HANDLER_LAMBDA_FN{ mDebugFlags |= cxrDebugFlags_TraceQosStats; return ParseStatus_Success; });
         AddOption("dump-images", "d", false, "Dump streamed images to disk periodically",
                   HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_DumpImages; return ParseStatus_Success;});
+        AddOption("capture-client-bitstream", "ccb", false, "Capture the client-received video bitstream to CloudXR log folder on client.",
+                  HANDLER_LAMBDA_FN{ mDebugFlags |= cxrDebugFlags_CaptureClientBitstream; return ParseStatus_Success; });
+        AddOption("capture-server-bitstream", "csb", false, "Capture the server-sent video bitstream to CloudXR log folder on server.",
+                  HANDLER_LAMBDA_FN{ mDebugFlags |= cxrDebugFlags_CaptureServerBitstream; return ParseStatus_Success; });
+        AddOption("dump-audio", "da", false, "Dump streamed audio to disk",
+                  HANDLER_LAMBDA_FN{ mDebugFlags |= cxrDebugFlags_DumpAudio; return ParseStatus_Success; });
         AddOption("embed-server-info", "esi", false, "Embed server info in frames during streaming",
                   HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_EmbedServerInfo; return ParseStatus_Success; });
         AddOption("embed-client-info", "eci", false, "Embed client info in framebuffers",
                   HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_EmbedClientInfo; return ParseStatus_Success; });
         AddOption("log-privacy-disable", "p", false, "Disable privacy filtering in logging",
                   HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_LogPrivacyDisabled; return ParseStatus_Success; });
+        AddOption("enable-sxr-decoder", "sxr", false, "Enable experimental SXR decoder on Android devices that support it",
+                  HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_EnableSXRDecoder; return ParseStatus_Success; });
+        AddOption("enable-ir-decoder", "ird", false, "Enable experimental ImageReader decoder on Android devices (reqs sdk >= 26)",
+                  HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_EnableImageReaderDecoder; return ParseStatus_Success; });
+        AddOption("fallback-decoder", "fbd", false, "If available, try to use a fallback video decoder for the platform.",
+                  HANDLER_LAMBDA_FN { mDebugFlags |= cxrDebugFlags_FallbackDecoder; return ParseStatus_Success; });
+
         AddOption("windowed", "w", false, "Use windowed mode instead of SteamVR",
                   HANDLER_LAMBDA_FN { mWindowed = true; return ParseStatus_Success;});
         AddOption("no-button-remap", "b", false, "Do not remap various controller buttons to SteamVR system menu and other functions",
@@ -112,6 +132,12 @@ public:
             });
         AddOption("latency-test", "l", false, "Runs local latency testing, where screen is black when no input, changes to white with input",
             HANDLER_LAMBDA_FN{ mTestLatency = true; return ParseStatus_Success; });
+        AddOption("enable-alpha", "a", false, "Enable streaming alpha",
+            HANDLER_LAMBDA_FN{ mEnableAlpha = true; return ParseStatus_Success; });
+        AddOption("enable-send-audio", "sa", false, "Enable sending audio to the server",
+            HANDLER_LAMBDA_FN{ mSendAudio = true; return ParseStatus_Success; });
+        AddOption("disable-receive-audio", "dra", false, "Disable receiving audio from the server",
+            HANDLER_LAMBDA_FN{ mReceiveAudio = false; return ParseStatus_Success; });
         AddOption("log-max-days", "lmd", true, "Maximum number of days until which logs persist.  -1 resets to default, 0 to never prune, or [1-365] days.",
             HANDLER_LAMBDA_FN
             {
@@ -147,7 +173,30 @@ public:
         AddOption("receiver-mode", "r", true, "Choose XR or generic receiver mode",
             HANDLER_LAMBDA_FN { std::stringstream ss(tok); ss >> mReceiverMode; return ParseStatus_Success; });
         AddOption("graphics-type", "g", true, "Choose graphics context type. [gles|cuda|d3d11]",
-            HANDLER_LAMBDA_FN { gfxType = tok; return ParseStatus_Success; });
+            HANDLER_LAMBDA_FN 
+            { 
+                if (tok == "cuda")
+                {
+                    mGfxType = cxrGraphicsContext_Cuda;
+                }
+ #ifdef __aarch64__
+                else if (tok == "gles")
+                {
+                    mGfxType = cxrGraphicsContext_GLES;
+                }
+ #elif _WIN32
+                else if (tok == "d3d11")
+                {
+                    mGfxType = cxrGraphicsContext_D3D11;
+                }
+ #endif
+                else
+                {
+                    return ParseStatus_BadVal;
+                }
+
+                return ParseStatus_Success;
+            });
         AddOption("user-data", "u", true, "Send a user string to the server",
             HANDLER_LAMBDA_FN { mUserData = tok; return ParseStatus_Success; });
         AddOption("foveation", "f", true, "Enable foveated scaling at given percentage scale [0-100]",

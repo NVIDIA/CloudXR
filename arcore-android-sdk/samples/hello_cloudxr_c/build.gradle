@@ -28,3 +28,15 @@ task extractCloudXR(type: Copy)  {
     from zipTree("${project.rootDir}/libs/CloudXR.aar")
     into "${project.rootDir}/libs/CloudXR"
 }
+
+task extractOboe(type: Copy) {
+    // Copy prefab folders into the expected layout for gradle 3.6
+    from zipTree("${project.rootDir}/libs/oboe-1.5.0.aar")
+    into "${project.rootDir}/libs/Oboe"
+    include "**/*.so"
+    include "**/*.h"
+    eachFile {
+        it.path = it.path.replaceFirst("prefab/modules/oboe/", "");
+        it.path = it.path.replaceFirst("libs/android.", "jni/");
+    }
+}

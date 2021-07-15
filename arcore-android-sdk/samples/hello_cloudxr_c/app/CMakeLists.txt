@@ -51,6 +51,13 @@ set_target_properties(arcore PROPERTIES IMPORTED_LOCATION
 add_library( glm INTERFACE )
 set_target_properties( glm PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${GLM_INCLUDE})
 
+# Import Oboe
+add_library(oboe-lib SHARED IMPORTED)
+set_target_properties(oboe-lib PROPERTIES IMPORTED_LOCATION
+                      ${OBOE_LIBPATH}/${ANDROID_ABI}/liboboe.so
+)
+include_directories(${OBOE_INCLUDE})
+
 # Import CloudXR
 add_library(cloudxr-lib SHARED IMPORTED)
 set_target_properties(cloudxr-lib PROPERTIES IMPORTED_LOCATION
@@ -67,13 +74,13 @@ add_library(hello_cloudxr_native SHARED
            src/main/cpp/hello_ar_application.cc
            src/main/cpp/jni_interface.cc
            src/main/cpp/plane_renderer.cc
-           src/main/cpp/util.cc
-           src/main/cpp/blitter.cc)
+           src/main/cpp/util.cc)
 
 target_include_directories(hello_cloudxr_native PRIVATE
            src/main/cpp)
 target_link_libraries(hello_cloudxr_native
                       cloudxr-lib
+                      oboe-lib
                       android
                       log
                       GLESv2

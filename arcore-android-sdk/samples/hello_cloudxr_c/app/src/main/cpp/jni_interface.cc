@@ -139,9 +139,9 @@ JNI_METHOD(void, onDisplayGeometryChanged)
       ->OnDisplayGeometryChanged(display_rotation, width, height);
 }
 
-JNI_METHOD(void, onGlSurfaceDrawFrame)
+JNI_METHOD(jint, onGlSurfaceDrawFrame)
 (JNIEnv *, jclass, jlong native_application) {
-  native(native_application)->OnDrawFrame();
+    return static_cast<jint>(native(native_application)->OnDrawFrame());
 }
 
 JNI_METHOD(void, onTouched)
