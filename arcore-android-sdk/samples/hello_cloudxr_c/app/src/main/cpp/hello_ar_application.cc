@@ -43,12 +43,13 @@
 #include <mutex>
 #include <EGL/egl.h>
 
+#include "oboe/Oboe.h"
+
 #include "plane_renderer.h"
 #include "util.h"
 
 #include "CloudXRClient.h"
 #include "CloudXRInputEvents.h"
-#include "blitter.h"
 #include "CloudXRClientOptions.h"
 
 namespace hello_ar {
@@ -105,12 +106,14 @@ public:
     }
 };
 
-class HelloArApplication::CloudXRClient {
+
+class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
  public:
   ~CloudXRClient() {
     Teardown();
   }
 
+  // CloudXR interface callbacks
   void TriggerHaptic(const cxrHapticFeedback*) {}
   void GetTrackingState(cxrVRTrackingState* state) {
     *state = {};
@@ -123,8 +126,35 @@ class HelloArApplication::CloudXRClient {
       std::lock_guard<std::mutex> lock(state_mutex_);
       const int idx = current_idx_ == 0 ?
           kQueueLen - 1 : (current_idx_ - 1)%kQueueLen;
-      state->hmd.pose.deviceToAbsoluteTracking = hmd_matrix_[idx];
+      state->hmd.pose.deviceToAbsoluteTracking = pose_matrix_[idx];
     }
+  }
+  cxrBool RenderAudio(const cxrAudioFrame *audioFrame)
+  {
+    if (!playback_stream_ || exiting_) {
+      return cxrFalse;
+    }
+
+    const uint32_t timeout = audioFrame->streamSizeBytes / CXR_AUDIO_BYTES_PER_MS;
+    const uint32_t numFrames = timeout * CXR_AUDIO_SAMPLING_RATE / 1000;
+    playback_stream_->write(audioFrame->streamBuffer, numFrames, timeout * oboe::kNanosPerMillisecond);
+
+    return cxrTrue;
+  }
+
+  // AudioStreamDataCallback interface
+  oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream,
+          void *audioData, int32_t numFrames)
+  {
+    if (!recording_stream_ || exiting_) {
+      return oboe::DataCallbackResult::Stop;
+    }
+    cxrAudioFrame recordedFrame{};
+    recordedFrame.streamBuffer = (int16_t*)audioData;
+    recordedFrame.streamSizeBytes = numFrames * CXR_AUDIO_CHANNEL_COUNT * CXR_AUDIO_SAMPLE_SIZE;
+    cxrSendAudio(cloudxr_receiver_, &recordedFrame);
+
+    return oboe::DataCallbackResult::Continue;
   }
 
   cxrDeviceDesc GetDeviceDesc() {
@@ -134,17 +164,19 @@ class HelloArApplication::CloudXRClient {
     device_desc_.maxResFactor = 1.0f; // leave alone, don't extra oversample on server.
     device_desc_.fps = static_cast<float>(fps_);
     device_desc_.ipd = 0.064f;
-    device_desc_.predOffset = -0.02f;
-    device_desc_.audio = 1;
+    device_desc_.predOffset = 0.02f;
+    device_desc_.receiveAudio = launch_options_.mReceiveAudio;
+    device_desc_.sendAudio = launch_options_.mSendAudio;
     device_desc_.disablePosePrediction = false;
     device_desc_.angularVelocityInDeviceSpace = false;
+    device_desc_.foveatedScaleFactor = 0; // ensure no foveation for AR.
 
     return device_desc_;
   }
 
-  void Connect() {
+  cxrError Connect() {
     if (cloudxr_receiver_)
-      return;
+      return cxrError_Success; // already connected, no error? TODO
 
     LOGI("Connecting to CloudXR at %s...", launch_options_.mServerIP.c_str());
 
@@ -163,6 +195,99 @@ class HelloArApplication::CloudXRClient {
     {
         return reinterpret_cast<CloudXRClient*>(context)->TriggerHaptic(haptic);
     };
+    clientProxy.RenderAudio = [](void* context, const cxrAudioFrame *audioFrame)
+    {
+        return reinterpret_cast<CloudXRClient*>(context)->RenderAudio(audioFrame);
+    };
+
+    if (device_desc.receiveAudio)
+    {
+      // Initialize audio playback
+      oboe::AudioStreamBuilder playback_stream_builder;
+      playback_stream_builder.setDirection(oboe::Direction::Output);
+      playback_stream_builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+      playback_stream_builder.setSharingMode(oboe::SharingMode::Exclusive);
+      playback_stream_builder.setFormat(oboe::AudioFormat::I16);
+      playback_stream_builder.setChannelCount(oboe::ChannelCount::Stereo);
+      playback_stream_builder.setSampleRate(CXR_AUDIO_SAMPLING_RATE);
+
+      oboe::Result r = playback_stream_builder.openStream(playback_stream_);
+      if (r != oboe::Result::OK) {
+          LOGE("Failed to open playback stream. Error: %s", oboe::convertToText(r));
+          //return; // for now continue to run...
+      }
+      else
+      {
+          int bufferSizeFrames = playback_stream_->getFramesPerBurst() * 2;
+          r = playback_stream_->setBufferSizeInFrames(bufferSizeFrames);
+          if (r != oboe::Result::OK)
+          {
+              LOGE("Failed to set playback stream buffer size to: %d. Error: %s",
+                   bufferSizeFrames, oboe::convertToText(r));
+              //return; // for now continue to run...
+          }
+          else
+          {
+              r = playback_stream_->start();
+              if (r != oboe::Result::OK)
+              {
+                  LOGE("Failed to start playback stream. Error: %s", oboe::convertToText(r));
+                  //return; // for now continue to run...
+              }
+          }
+      }
+
+      // if there was an error setting up, turn off receiving audio for this connection.
+      if (r != oboe::Result::OK) {
+        device_desc.receiveAudio = false;
+        launch_options_.mReceiveAudio = false;
+          if (playback_stream_) {
+              playback_stream_->close();
+              playback_stream_.reset();
+          }
+      }
+    }
+
+    if (device_desc.sendAudio)
+    {
+      // Initialize audio recording
+      oboe::AudioStreamBuilder recording_stream_builder;
+      recording_stream_builder.setDirection(oboe::Direction::Input);
+      recording_stream_builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+      recording_stream_builder.setSharingMode(oboe::SharingMode::Exclusive);
+      recording_stream_builder.setFormat(oboe::AudioFormat::I16);
+      recording_stream_builder.setChannelCount(oboe::ChannelCount::Stereo);
+      recording_stream_builder.setSampleRate(CXR_AUDIO_SAMPLING_RATE);
+      recording_stream_builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+      recording_stream_builder.setDataCallback(this);
+
+      oboe::Result r = recording_stream_builder.openStream(recording_stream_);
+      if (r != oboe::Result::OK) {
+          LOGE("Failed to open recording stream. Error: %s", oboe::convertToText(r));
+          //return; // for now continue to run...
+      }
+      else
+      {
+          r = recording_stream_->start();
+          if (r != oboe::Result::OK)
+          {
+              LOGE("Failed to start recording stream. Error: %s", oboe::convertToText(r));
+              //return; // for now continue to run...
+          }
+      }
+
+      // if there was an error setting up, turn off sending audio for this connection.
+      if (r != oboe::Result::OK) {
+        device_desc.sendAudio = false;
+        launch_options_.mSendAudio = false;
+        if (recording_stream_) {
+            recording_stream_->close();
+            recording_stream_.reset();
+        }
+      }
+    }
+
+    LOGI("Audio support: receive [%s], send [%s]", device_desc.receiveAudio?"on":"off", device_desc.sendAudio?"on":"off");
 
     cxrReceiverDesc desc = { 0 };
     desc.requestedVersion = CLOUDXR_VERSION_DWORD;
@@ -170,7 +295,7 @@ class HelloArApplication::CloudXRClient {
     desc.clientCallbacks = clientProxy;
     desc.clientContext = this;
     desc.shareContext = &context;
-    desc.numStreams = 2;
+    desc.numStreams = CXR_NUM_VIDEO_STREAMS_XR;
     desc.receiverMode = cxrStreamingMode_XR;
     desc.debugFlags = launch_options_.mDebugFlags;
     desc.logMaxSizeKB = CLOUDXR_LOG_MAX_DEFAULT;
@@ -179,14 +304,14 @@ class HelloArApplication::CloudXRClient {
     if (err != cxrError_Success)
     {
       LOGE("Failed to create CloudXR receiver. Error %d, %s.", err, cxrErrorString(err));
-      return; // err;
+      return err;
     }
-    err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str());
+    err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str(), cxrConnectionFlags_Default);
     if (err != cxrError_Success)
     {
       LOGE("Failed to connect to CloudXR server at %s. Error %d, %s.", launch_options_.mServerIP.c_str(), (int)err, cxrErrorString(err));
       Teardown();
-      return; // err;
+      return err;
     }
 
     // else, good to go.
@@ -195,38 +320,51 @@ class HelloArApplication::CloudXRClient {
     // AR shouldn't have an arena, should it?  Maybe something large?
     //LOGI("Setting default 1m radius arena boundary.", result);
     //cxrSetArenaBoundary(Receiver, 10.f, 0, 0);
+
+    return cxrError_Success;
   }
 
   void Teardown() {
+    if (playback_stream_)
+    {
+        playback_stream_->close();
+        playback_stream_.reset();
+    }
+
+    if (recording_stream_)
+    {
+        recording_stream_->close();
+        recording_stream_.reset();
+    }
+
     if (cloudxr_receiver_) {
       LOGI("Tearing down CloudXR...");
       cxrDestroyReceiver(cloudxr_receiver_);
+      cloudxr_receiver_ = nullptr;
     }
-
-    cloudxr_receiver_ = nullptr;
   }
 
   bool IsRunning() const {
-    return cloudxr_receiver_ && cxrIsRunning(cloudxr_receiver_);
+    return cloudxr_receiver_;
   }
 
-  void SetHMDMatrix(const glm::mat4& hmd_mat) {
+  void SetPoseMatrix(const glm::mat4& pose_mat) {
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    auto& hmd_matrix = hmd_matrix_[current_idx_];
+    auto& pose_matrix = pose_matrix_[current_idx_];
 
-    hmd_matrix.m[0][0] = hmd_mat[0][0];
-    hmd_matrix.m[0][1] = hmd_mat[1][0];
-    hmd_matrix.m[0][2] = hmd_mat[2][0];
-    hmd_matrix.m[0][3] = hmd_mat[3][0];
-    hmd_matrix.m[1][0] = hmd_mat[0][1];
-    hmd_matrix.m[1][1] = hmd_mat[1][1];
-    hmd_matrix.m[1][2] = hmd_mat[2][1];
-    hmd_matrix.m[1][3] = hmd_mat[3][1];
-    hmd_matrix.m[2][0] = hmd_mat[0][2];
-    hmd_matrix.m[2][1] = hmd_mat[1][2];
-    hmd_matrix.m[2][2] = hmd_mat[2][2];
-    hmd_matrix.m[2][3] = hmd_mat[3][2];
+      pose_matrix.m[0][0] = pose_mat[0][0];
+      pose_matrix.m[0][1] = pose_mat[1][0];
+      pose_matrix.m[0][2] = pose_mat[2][0];
+      pose_matrix.m[0][3] = pose_mat[3][0];
+      pose_matrix.m[1][0] = pose_mat[0][1];
+      pose_matrix.m[1][1] = pose_mat[1][1];
+      pose_matrix.m[1][2] = pose_mat[2][1];
+      pose_matrix.m[1][3] = pose_mat[3][1];
+      pose_matrix.m[2][0] = pose_mat[0][2];
+      pose_matrix.m[2][1] = pose_mat[1][2];
+      pose_matrix.m[2][2] = pose_mat[2][2];
+      pose_matrix.m[2][3] = pose_mat[3][2];
 
     current_idx_ = (current_idx_ + 1)%kQueueLen;
   }
@@ -275,49 +413,43 @@ class HelloArApplication::CloudXRClient {
           kQueueLen + (current_idx_ - offset)%kQueueLen :
           (current_idx_ - offset)%kQueueLen;
 
-      const auto& hmd_matrix = hmd_matrix_[idx];
+      const auto& pose_matrix = pose_matrix_[idx];
 
-      if (fabsf(hmd_matrix.m[0][0] - frame_.hmdMatrix.m[0][0]) < 0.0001f &&
-          fabsf(hmd_matrix.m[0][1] - frame_.hmdMatrix.m[0][1]) < 0.0001f &&
-          fabsf(hmd_matrix.m[0][2] - frame_.hmdMatrix.m[0][2]) < 0.0001f &&
-          fabsf(hmd_matrix.m[0][3] - frame_.hmdMatrix.m[0][3]) < 0.0001f &&
-          fabsf(hmd_matrix.m[1][0] - frame_.hmdMatrix.m[1][0]) < 0.0001f &&
-          fabsf(hmd_matrix.m[1][1] - frame_.hmdMatrix.m[1][1]) < 0.0001f &&
-          fabsf(hmd_matrix.m[1][2] - frame_.hmdMatrix.m[1][2]) < 0.0001f &&
-          fabsf(hmd_matrix.m[1][3] - frame_.hmdMatrix.m[1][3]) < 0.0001f &&
-          fabsf(hmd_matrix.m[2][0] - frame_.hmdMatrix.m[2][0]) < 0.0001f &&
-          fabsf(hmd_matrix.m[2][1] - frame_.hmdMatrix.m[2][1]) < 0.0001f &&
-          fabsf(hmd_matrix.m[2][2] - frame_.hmdMatrix.m[2][2]) < 0.0001f &&
-          fabsf(hmd_matrix.m[2][3] - frame_.hmdMatrix.m[2][3]) < 0.0001f) {
-        return offset;
+      int notMatch = 0;
+      for (int i=0; i<3; i++) {
+          for (int j=0; j<4; j++) {
+              if (fabsf(pose_matrix.m[i][j] - framesLatched_.poseMatrix.m[i][j]) >= 0.0001f)
+                  notMatch++;
+          }
       }
+      if (0==notMatch) // then matrices are close enough to qualify as equal
+          return offset;
     }
 
     return 0;
   }
 
-  bool Latch() {
+  cxrError Latch() {
     if (latched_) {
-      return true;
+      return cxrError_Success;
     }
 
     if (!IsRunning()) {
-      return false;
+      return cxrError_Receiver_Not_Running;
     }
 
     // Fetch the frame
     const uint32_t timeout_ms = 150;
-    const bool have_frame = cxrLatchFrameXR(cloudxr_receiver_,
-        &frame_, timeout_ms) == cxrError_Success;
+    cxrError status = cxrLatchFrame(cloudxr_receiver_, &framesLatched_,
+            cxrFrameMask_All, timeout_ms);
 
-    if (!have_frame) {
+    if (status != cxrError_Success) {
       LOGI("CloudXR frame is not available!");
-      return false;
+      return status;
     }
 
     latched_ = true;
-
-    return true;
+    return cxrError_Success;
   }
 
   void Release() {
@@ -325,7 +457,7 @@ class HelloArApplication::CloudXRClient {
       return;
     }
 
-    cxrReleaseFrameXR(cloudxr_receiver_, &frame_);
+    cxrReleaseFrame(cloudxr_receiver_, &framesLatched_);
     latched_ = false;
   }
 
@@ -334,10 +466,7 @@ class HelloArApplication::CloudXRClient {
       return;
     }
 
-    blitter_.BlitTexture(0, 0, 0, 0, 0,
-        (uint32_t)frame_.eyeTexture[0].texture,
-        (uint32_t)frame_.eyeTexture[1].texture,
-        color_correction);
+    cxrBlitFrame(cloudxr_receiver_, &framesLatched_, cxrFrameMask_All);
   }
 
   void UpdateLightProps(const float primaryDirection[3], const float primaryIntensity[3],
@@ -430,23 +559,27 @@ private:
   uint32_t stream_width_ = 720;
   uint32_t stream_height_ = 1440;
 
-  cxrVideoFrameXR frame_ = {};
+  cxrFramesLatched framesLatched_ = {};
   bool latched_ = false;
 
   std::mutex state_mutex_;
-  cxrMatrix34 hmd_matrix_[kQueueLen] = {};
+  cxrMatrix34 pose_matrix_[kQueueLen] = {};
   cxrDeviceDesc device_desc_ = {};
   int current_idx_ = 0;
 
-  Blitter blitter_;
-
   int fps_ = 60;
+
+  std::shared_ptr<oboe::AudioStream> recording_stream_{};
+  std::shared_ptr<oboe::AudioStream> playback_stream_{};
 };
 
+// need to decl our static variable.
+bool HelloArApplication::exiting_ = false;
 
 HelloArApplication::HelloArApplication(AAssetManager* asset_manager)
     : asset_manager_(asset_manager) {
   cloudxr_client_ = std::make_unique<HelloArApplication::CloudXRClient>();
+  exiting_ = false; // reset static here in case library remains resident..
 }
 
 HelloArApplication::~HelloArApplication() {
@@ -592,9 +725,11 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
       ArConfig_setAugmentedImageDatabase(ar_session_, config,
                                          ar_augmented_image_database);
       using_image_anchors_ = true;
-      LOGI("Using image anchors.");
+      LOGI("AR Anchors: Tracking using IMAGE ANCHOR DB.");
 
       ArAugmentedImageDatabase_destroy(ar_augmented_image_database);
+    } else {
+      LOGI("AR Anchors: Tracking using environment detail.");
     }
 
     // Enable cloud anchors when necessary
@@ -789,7 +924,8 @@ void HelloArApplication::UpdateCloudAnchor() {
 }
 
 // Render the scene.
-void HelloArApplication::OnDrawFrame() {
+// return value 0 means that Java should finish and clean up.
+int HelloArApplication::OnDrawFrame() {
   // clearing to dark red to start, so it is obvious if we fail out early or don't render anything
   glClearColor(0.3f, 0.0f, 0.0f, 1.0f);
   glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
@@ -799,7 +935,11 @@ void HelloArApplication::OnDrawFrame() {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  if (ar_session_ == nullptr) return;
+  // if we're exiting, return 0 to java.  not an error, it should already know.
+  if (exiting_) return(0);
+
+  // if no AR session, return 0 to java.  no further error, it should already know.
+  if (ar_session_ == nullptr) return (0);
 
   const GLuint camera_texture = background_renderer_.GetTextureId();
 
@@ -820,6 +960,9 @@ void HelloArApplication::OnDrawFrame() {
                                /*near=*/0.1f, /*far=*/100.f,
                                glm::value_ptr(projection_mat));
 
+  static ArTrackingState camera_last_state = AR_TRACKING_STATE_TRACKING;
+  static ArTrackingFailureReason lastReason = AR_TRACKING_FAILURE_REASON_NONE;
+
   ArTrackingState camera_tracking_state;
   ArCamera_getTrackingState(ar_session_, ar_camera, &camera_tracking_state);
   ArCamera_release(ar_camera);
@@ -838,11 +981,13 @@ void HelloArApplication::OnDrawFrame() {
   if (camera_tracking_state != AR_TRACKING_STATE_TRACKING) {
     if (camera_tracking_state == AR_TRACKING_STATE_STOPPED)
     {
-      LOGI("Note camera tracking is in STOPPED state.");
+      if (camera_tracking_state != camera_last_state)
+        LOGI("Note camera tracking is in STOPPED state.");
     }
     else
     { // camera is paused state
-      LOGI("Note camera tracking is PAUSED.");
+      if (camera_tracking_state != camera_last_state)
+        LOGI("Note camera tracking is PAUSED.");
       ArTrackingFailureReason reason;
       ArCamera_getTrackingFailureReason(ar_session_, ar_camera, &reason);
       switch(reason)
@@ -850,26 +995,29 @@ void HelloArApplication::OnDrawFrame() {
           case AR_TRACKING_FAILURE_REASON_NONE:
               break;
           case AR_TRACKING_FAILURE_REASON_BAD_STATE:
-              LOGE("Camera tracking lost due to bad internal state.");
+              if (reason!=lastReason) LOGE("Camera tracking lost due to bad internal state.");
               break;
           case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_LIGHT:
-              LOGE("Camera tracking lost due to insufficient lighting.  Please move to brighter area.");
+              if (reason!=lastReason) LOGE("Camera tracking lost due to insufficient lighting.  Please move to brighter area.");
               break;
           case AR_TRACKING_FAILURE_REASON_EXCESSIVE_MOTION:
-              LOGE("Camera tracking lost due to excessive motion.  Please move more slowly.");
+              if (reason!=lastReason) LOGE("Camera tracking lost due to excessive motion.  Please move more slowly.");
               break;
           case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_FEATURES:
-              LOGE("Camera tracking lost due to insufficient visual features to track.  Move to area with more surface details.");
+              if (reason!=lastReason) LOGE("Camera tracking lost due to insufficient visual features to track.  Move to area with more surface details.");
               break;
       }
+      // cache reason+state so we only log errors once...
+      lastReason = reason;
+      camera_last_state = camera_tracking_state;
     }
-    return;
+    return (0);
   }
 
   // We need to (re)calibrate but CloudXR client is running - continue
   // pulling the frames. There'll be a lag otherwise.
   if (!base_frame_calibrated_ && cloudxr_client_->IsRunning()) {
-    if (cloudxr_client_->Latch())
+    if (cloudxr_client_->Latch()==cxrError_Success)
       cloudxr_client_->Release();
   }
 
@@ -895,19 +1043,37 @@ void HelloArApplication::OnDrawFrame() {
 
     if (!cloudxr_client_->IsRunning()) {
       cloudxr_client_->SetProjectionMatrix(projection_mat);
-      cloudxr_client_->Connect();
+      cxrError status = cloudxr_client_->Connect();
+      // for sync connection, this will do for now to error check..
+      if (status != cxrError_Success) {
+          exiting_ = true;
+          return((int)status); // TODO: real error codes?
+      }
     }
 
-    const bool have_frame = cloudxr_client_->Latch();
+    const cxrError status = cloudxr_client_->Latch();
+    if (status != cxrError_Success) {
+      LOGE("Latch failed, %s", cxrErrorString(status));
+      if (status == cxrError_Receiver_Not_Running) {
+        exiting_ = true;
+        return status;
+      }
+      else if (status == cxrError_Frame_Not_Ready) {
+        // TODO: we might want to display a cached prior frame or not even swap backbuffers.
+      }
+      // else TODO: code should handle other potential errors that are non-fatal, but
+      //  may be enough to need to disconnect or reset view or other interruption cases.
+    }
+    const bool have_frame = (status == cxrError_Success);
     const int pose_offset = have_frame ? cloudxr_client_->DetermineOffset() : 0;
 
     // Render cached camera frame to the screen
     glViewport(0, 0, display_width_, display_height_);
     background_renderer_.Draw(ar_session_, ar_frame_, pose_offset);
 
-    // Setup HMD matrix with our base frame
-    const glm::mat4 cloudxr_hmd_mat = base_frame_*glm::inverse(view_mat);
-    cloudxr_client_->SetHMDMatrix(cloudxr_hmd_mat);
+    // Setup pose matrix with our base frame
+    const glm::mat4 cloudxr_pose_mat = base_frame_*glm::inverse(view_mat);
+    cloudxr_client_->SetPoseMatrix(cloudxr_pose_mat);
 
     // Set light intensity to default. Intensity value ranges from 0.0f to 1.0f.
     // The first three components are color scaling factors.
@@ -959,7 +1125,7 @@ void HelloArApplication::OnDrawFrame() {
   // Calibrate base frame only when neccessary
   if (!cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_ &&
       (base_frame_calibrated_ || using_image_anchors_)) {
-    return;
+    return(0);
   }
 
   // Try fetch zero basis
@@ -1026,6 +1192,8 @@ void HelloArApplication::OnDrawFrame() {
 
   ArTrackableList_destroy(plane_list);
   plane_list = nullptr;
+
+  return(0);
 }
 
 void HelloArApplication::OnTouched(float x, float y, bool longPress) {

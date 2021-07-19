@@ -52,10 +52,23 @@ public class PermissionHelper {
   private static final String INTERNET_PERMISSION = Manifest.permission.INTERNET;
   private static final String WRITE_PERMISSION = Manifest.permission.READ_EXTERNAL_STORAGE;
   private static final String READ_PERMISSION = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+  private static final String RECORD_AUDIO = Manifest.permission.RECORD_AUDIO;
   private static final int PERMISSION_CODE = 0;
 
-  /** Check to see we have the necessary permissions for this app. */
+  /** Check to see we have all permissions for this app. */
   public static boolean hasPermissions(Activity activity) {
+    return ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
+          == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(activity, INTERNET_PERMISSION)
+          == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(activity, WRITE_PERMISSION)
+          == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(activity, READ_PERMISSION)
+          == PackageManager.PERMISSION_GRANTED;
+  }
+
+  /** Check to see we have the required permissions for this app. */
+  public static boolean hasRequiredPermissions(Activity activity) {
     return ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
           == PackageManager.PERMISSION_GRANTED &&
         ContextCompat.checkSelfPermission(activity, INTERNET_PERMISSION)
@@ -69,7 +82,7 @@ public class PermissionHelper {
   /** Check to see we have the necessary permissions for this app, and ask for them if we don't. */
   public static void requestPermissions(Activity activity) {
     ActivityCompat.requestPermissions( activity,
-      new String[] { CAMERA_PERMISSION, INTERNET_PERMISSION, WRITE_PERMISSION, READ_PERMISSION },
+      new String[] { CAMERA_PERMISSION, INTERNET_PERMISSION, WRITE_PERMISSION, READ_PERMISSION, RECORD_AUDIO },
       PERMISSION_CODE
     );
   }

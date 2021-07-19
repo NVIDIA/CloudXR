@@ -28,7 +28,8 @@ android {
         applicationId "com.nvidia.ar.hellocloudxr"
 
         // 24 is the minimum since ARCore only works with 24 and higher.
-        minSdkVersion 24
+        // but as CloudXR library now uses 25 min, we need to match here.
+        minSdkVersion 25
         targetSdkVersion 28
         versionCode 1
         versionName setVersionName()
@@ -36,10 +37,12 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++1y", "-Wall"
-                arguments "-DANDROID_STL=c++_static",
+                arguments "-DANDROID_STL=c++_shared",
                         "-DARCORE_LIBPATH=${arcore_libpath}/jni",
                         "-DARCORE_INCLUDE=${project.rootDir}/../../libraries/include",
                         "-DGLM_INCLUDE=${project.rootDir}/../../libraries/glm",
+                        "-DOBOE_LIBPATH=${project.rootDir}/libs/Oboe/jni",
+                        "-DOBOE_INCLUDE=${project.rootDir}/libs/Oboe/include",
                         "-DCLOUDXR_LIBPATH=${project.rootDir}/libs/CloudXR/jni",
                         "-DCLOUDXR_INCLUDE=${project.rootDir}/libs/CloudXR/include",
                         "-DC_SHARED_INCLUDE=${project.rootDir}/../../../../shared"
@@ -47,6 +50,11 @@ android {
         }
         ndk {
             abiFilters "armeabi-v7a"
+        }
+        sourceSets {
+            main {
+                jniLibs.srcDirs = ["${project.rootDir}/libs/Oboe/jni"]
+            }
         }
     }
 
@@ -115,4 +123,5 @@ tasks.whenTaskAdded {
     }
 }
 
+preBuild.dependsOn(':extractOboe')
 preBuild.dependsOn(':extractCloudXR')

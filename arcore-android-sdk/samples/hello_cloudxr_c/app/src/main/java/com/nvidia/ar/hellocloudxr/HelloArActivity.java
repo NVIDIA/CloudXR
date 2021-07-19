@@ -293,13 +293,24 @@ public class HelloArActivity extends AppCompatActivity
             nativeApplication, displayRotation, viewportWidth, viewportHeight);
         viewportChanged = false;
       }
-      JniInterface.onGlSurfaceDrawFrame(nativeApplication);
+
+      int status = JniInterface.onGlSurfaceDrawFrame(nativeApplication);
+      if (status!=0) {
+        Log.e(TAG, "Error ["+status+"] reported during frame update. Finishing activity and exiting.");
+        // need to shut down.
+        runOnUiThread(new Runnable() {
+          public void run() {
+            Toast.makeText(getApplicationContext(), "CloudXR ARCore Client: Error ["+status+"], see logs for detail.  Exiting.", Toast.LENGTH_LONG).show();
+            finish();
+          }
+        });
+      }
     }
   }
 
   @Override
   public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-    if (PermissionHelper.hasPermissions(this)) {
+    if (PermissionHelper.hasRequiredPermissions(this)) {
         // now that we have permissions, we move on to checking launch options and resuming.
         checkLaunchOptions();
     } else {

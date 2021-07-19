@@ -79,7 +79,7 @@ public class JniInterface {
       long nativeApplication, int displayRotation, int width, int height);
 
   /** Main render loop, called on the OpenGL thread. */
-  public static native void onGlSurfaceDrawFrame(long nativeApplication);
+  public static native int onGlSurfaceDrawFrame(long nativeApplication);
 
   /** OnTouch event, called on the OpenGL thread. */
   public static native void onTouched(long nativeApplication, float x, float y, boolean longPress);
