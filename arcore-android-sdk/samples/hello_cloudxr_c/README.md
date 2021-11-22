@@ -9,12 +9,13 @@ Prerequisites
 -------------
 
 * An Android tablet or phone that supports the ARCore SDK
-* CloudXR 3.0 SDK Release
+* CloudXR 3.1 SDK Release
 * [Android Studio v4.0 or later](https://developer.android.com/studio)
   * (optional) A fully setup Android development environment with Android SDK, Android NDK, and Android Platform Tools and OpenJDK 1.8
 * Base required version of tools: Android SDK 25, NDK 21.4.7075529, Build tools 28.0.3, Gradle 6.1.1, and Gradle android plugin 3.6.4.
 * [Google Oboe SDK 1.5.0](https://github.com/google/oboe/releases/tag/1.5.0)
-* [Latest ARCore SDK](https://developers.google.com/ar)
+* [ARCore SDK 1.26.0 or newer](https://developers.google.com/ar)
+  NOTE: Since build.gradle has ARCore listed as a dependency, the gradle build will automatically download and cache the SDK for you.  You may however find you need to adjust the ***version number*** higher based on the devices and features that you support.  This sample is currently based on ARCore SDK 1.26.0.
 
 Building with Android Studio
 ----------------------------

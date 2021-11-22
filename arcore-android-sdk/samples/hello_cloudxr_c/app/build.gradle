@@ -38,6 +38,7 @@ android {
             cmake {
                 cppFlags "-std=c++1y", "-Wall"
                 arguments "-DANDROID_STL=c++_shared",
+                        "-DANDROID_ABI=arm64-v8a",
                         "-DARCORE_LIBPATH=${arcore_libpath}/jni",
                         "-DARCORE_INCLUDE=${project.rootDir}/../../libraries/include",
                         "-DGLM_INCLUDE=${project.rootDir}/../../libraries/glm",
@@ -49,7 +50,7 @@ android {
             }
         }
         ndk {
-            abiFilters "armeabi-v7a"
+            abiFilters 'arm64-v8a'
         }
         sourceSets {
             main {
@@ -93,8 +94,8 @@ repositories {
 
 dependencies {
     // ARCore library
-    implementation 'com.google.ar:core:1.12.0'
-    natives 'com.google.ar:core:1.12.0'
+    implementation 'com.google.ar:core:1.26.0'
+    natives 'com.google.ar:core:1.26.0'
 
     implementation 'com.android.support:appcompat-v7:28.0.0'
     implementation 'com.android.support:design:28.0.0'

@@ -66,7 +66,7 @@ import android.content.SharedPreferences;
  */
 public class HelloArActivity extends AppCompatActivity
     implements GLSurfaceView.Renderer, DisplayManager.DisplayListener {
-  private static final String TAG = HelloArActivity.class.getSimpleName();
+  private static final String TAG = "CXR ArCore";
   private static final int SNACKBAR_UPDATE_INTERVAL_MILLIS = 1000; // In milliseconds.
 
   SharedPreferences prefs = null;
@@ -193,30 +193,37 @@ public class HelloArActivity extends AppCompatActivity
   }
 
   protected void checkLaunchOptions() {
-      // we're done with permission checks, so can tell native now is safe to
-      // try to load files and such.
-      JniInterface.handleLaunchOptions(nativeApplication, cmdlineFromIntent);
+    if (wasResumed || ServerIPDialog.isShowing())
+      return;
 
-      // check if the native code already has a server IP, and if so
-      // we will skip presenting the IP entry dialog for now...
-      String jniIpAddr = JniInterface.getServerIp(nativeApplication);
-      if (jniIpAddr.isEmpty()) {
-          String prevIP = prefs.getString(ipAddrPref, "");
-          String prevCloudAnchor = prefs.getString(cloudAnchorPref, "");
-          ServerIPDialog.show(this, prevIP, prevCloudAnchor);
-      } else {
-          doResume();
-      }
+    Log.v(TAG, "Checking launch options..");
+
+    // we're done with permission checks, so can tell native now is safe to
+    // try to load files and such.
+    JniInterface.handleLaunchOptions(nativeApplication, cmdlineFromIntent);
+
+    // check if the native code already has a server IP, and if so
+    // we will skip presenting the IP entry dialog for now...
+    String jniIpAddr = JniInterface.getServerIp(nativeApplication);
+    if (jniIpAddr.isEmpty()) {
+      String prevIP = prefs.getString(ipAddrPref, "");
+      String prevCloudAnchor = prefs.getString(cloudAnchorPref, "");
+      ServerIPDialog.show(this, prevIP, prevCloudAnchor);
+    } else {
+      doResume();
+    }
   }
 
   @Override
   protected void onResume() {
+    Log.v(TAG, "onResume");
     super.onResume();
 
     // We require camera, internet, and file permissions to function.
     // If we don't yet have permissions, need to go ask the user now.
     if (!PermissionHelper.hasPermissions(this)) {
       PermissionHelper.requestPermissions(this);
+      Log.v(TAG, "early return, waiting on permission callback");
       return;
     }
 
@@ -226,6 +233,7 @@ public class HelloArActivity extends AppCompatActivity
 
   @Override
   public void onPause() {
+    Log.v(TAG, "onPause");
     super.onPause();
     if (wasResumed) {
       surfaceView.onPause();
@@ -246,6 +254,7 @@ public class HelloArActivity extends AppCompatActivity
     synchronized (this) {
       JniInterface.destroyNativeApplication(nativeApplication);
       nativeApplication = 0;
+      wasResumed = false;
     }
   }
 
@@ -310,6 +319,10 @@ public class HelloArActivity extends AppCompatActivity
 
   @Override
   public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+    Log.v(TAG, "Got permission result callback");
+    if (requestCode != PermissionHelper.getRequestCode())
+      return;
+
     if (PermissionHelper.hasRequiredPermissions(this)) {
         // now that we have permissions, we move on to checking launch options and resuming.
         checkLaunchOptions();
