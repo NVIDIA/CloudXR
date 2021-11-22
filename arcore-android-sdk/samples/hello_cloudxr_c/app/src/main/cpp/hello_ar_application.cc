@@ -52,6 +52,13 @@
 #include "CloudXRInputEvents.h"
 #include "CloudXRClientOptions.h"
 
+#ifndef CHECK_NOTIFY_STATUS
+#define CHECK_NOTIFY_STATUS(stat, terminate)                                               \
+  if (stat!=AR_SUCCESS) {                                                                 \
+    NotifyUserError(stat, __FILE__, __LINE__, terminate);\
+  }
+#endif  // CHECK
+
 namespace hello_ar {
 namespace {
 const glm::vec3 kWhite = {255, 255, 255};
@@ -205,6 +212,9 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       // Initialize audio playback
       oboe::AudioStreamBuilder playback_stream_builder;
       playback_stream_builder.setDirection(oboe::Direction::Output);
+      // On some platforms oboe::PerformanceMode::LowLatency leads to stutter during playback of
+      // audio received from the server, using oboe::PerformanceMode::None as shown below can help:
+      // playback_stream_builder.setPerformanceMode(oboe::PerformanceMode::None);
       playback_stream_builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
       playback_stream_builder.setSharingMode(oboe::SharingMode::Exclusive);
       playback_stream_builder.setFormat(oboe::AudioFormat::I16);
@@ -586,10 +596,14 @@ HelloArApplication::~HelloArApplication() {
   if (ar_session_ != nullptr) {
     if (ar_camera_intrinsics_ != nullptr) {
       ArCameraIntrinsics_destroy(ar_camera_intrinsics_);
+      ar_camera_intrinsics_ = nullptr;
     }
-
+    if (ar_frame_ != nullptr) {
+        ArFrame_destroy(ar_frame_);
+        ar_frame_ = nullptr;
+    }
     ArSession_destroy(ar_session_);
-    ArFrame_destroy(ar_frame_);
+    ar_session_ = nullptr;
   }
 }
 
@@ -613,6 +627,12 @@ std::string HelloArApplication::GetServerIp() {
   return cloudxr_client_->GetServerAddr();
 }
 
+void HelloArApplication::NotifyUserError(ArStatus stat, const char* filename, const int linenum, bool terminate /*==false*/) {
+    LOGE("Error #%d from ARCore at %s:%d", stat, filename, linenum);
+    // TODO: should really push back to Java and display a dialog before exiting, and exit cleanly.
+    if (terminate) abort();
+}
+
 void HelloArApplication::OnPause() {
   LOGI("OnPause()");
   if (ar_session_ != nullptr) {
@@ -623,6 +643,8 @@ void HelloArApplication::OnPause() {
 }
 
 void HelloArApplication::OnResume(void* env, void* context, void* activity) {
+  ArStatus stat;
+
   LOGI("OnResume()");
 
   if (ar_session_ == nullptr) {
@@ -636,8 +658,9 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
     // This method can and will fail in user-facing situations.  Your
     // application must handle these cases at least somewhat gracefully.  See
     // HelloAR Java sample code for reasonable behavior.
-    CHECK(ArCoreApk_requestInstall(env, activity, user_requested_install,
-                                   &install_status) == AR_SUCCESS);
+    stat = ArCoreApk_requestInstall(env, activity, user_requested_install,
+                                   &install_status);
+    CHECK_NOTIFY_STATUS(stat, true);
 
     switch (install_status) {
       case AR_INSTALL_STATUS_INSTALLED:
@@ -651,7 +674,8 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
     // This method can and will fail in user-facing situations.  Your
     // application must handle these cases at least somewhat gracefully.  See
     // HelloAR Java sample code for reasonable behavior.
-    CHECK(ArSession_create(env, context, &ar_session_) == AR_SUCCESS);
+    stat = ArSession_create(env, context, &ar_session_);
+    CHECK_NOTIFY_STATUS(stat, true);
     CHECK(ar_session_);
 
     ArFrame_create(ar_session_, &ar_frame_);
@@ -674,7 +698,7 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
     ArCameraConfigList_getSize(ar_session_, all_camera_configs, &num_configs);
 
     if (num_configs < 1) {
-      LOGI("No 60Hz camera available!");
+      LOGE("No 60Hz camera available!  Setting to 30fps.");
       cloudxr_client_->SetFps(30);
     } else {
       ArCameraConfig* camera_config;
@@ -747,8 +771,8 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
 
   ArCameraIntrinsics_create(ar_session_, &ar_camera_intrinsics_);
 
-  const ArStatus status = ArSession_resume(ar_session_);
-  CHECK(status == AR_SUCCESS);
+  stat = ArSession_resume(ar_session_);
+  CHECK_NOTIFY_STATUS(stat, true);
 
   ArCamera* ar_camera;
   ArFrame_acquireCamera(ar_session_, ar_frame_, &ar_camera);
@@ -824,7 +848,7 @@ void HelloArApplication::UpdateImageAnchors() {
           const ArStatus status = ArTrackable_acquireNewAnchor(
               ar_session_, ar_trackable, scopedArPose.GetArPose(),
               &image_anchor);
-          CHECK(status == AR_SUCCESS);
+          CHECK_NOTIFY_STATUS(status, true);
 
           // Now we have an Anchor, record this image.
           augmented_image_map[image_index] =
@@ -911,7 +935,7 @@ void HelloArApplication::UpdateCloudAnchor() {
   }
 
   // Get hosted id and report
-  // TODO(iterentiev): find a better way to report
+  // TODO: find a way to report to user
   if (launch_options.hosting_cloud_anchor_ && nullptr != cloud_anchor_) {
     char* cloud_anchor_id = nullptr;
     ArAnchor_acquireCloudAnchorId(ar_session_, cloud_anchor_,
@@ -927,7 +951,8 @@ void HelloArApplication::UpdateCloudAnchor() {
 // return value 0 means that Java should finish and clean up.
 int HelloArApplication::OnDrawFrame() {
   // clearing to dark red to start, so it is obvious if we fail out early or don't render anything
-  glClearColor(0.3f, 0.0f, 0.0f, 1.0f);
+  // but if exiting, just render black on the way out...
+  glClearColor(exiting_? 0.0f : 0.3f, 0.0f, 0.0f, 1.0f);
   glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 
   glEnable(GL_CULL_FACE);
@@ -1059,9 +1084,11 @@ int HelloArApplication::OnDrawFrame() {
         return status;
       }
       else if (status == cxrError_Frame_Not_Ready) {
-        // TODO: we might want to display a cached prior frame or not even swap backbuffers.
+        // TODO: if fixed framerate, should cache and re-render prior frame.
+        //  if not fixed, can just not swap backbuffer.
       }
-      // else TODO: code should handle other potential errors that are non-fatal, but
+      // else
+      // TODO: code should handle other potential errors that are non-fatal, but
       //  may be enough to need to disconnect or reset view or other interruption cases.
     }
     const bool have_frame = (status == cxrError_Success);

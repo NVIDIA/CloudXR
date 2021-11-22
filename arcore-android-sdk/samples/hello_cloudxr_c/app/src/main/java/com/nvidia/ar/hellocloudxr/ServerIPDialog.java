@@ -24,6 +24,9 @@ package com.nvidia.ar.hellocloudxr;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.widget.EditText;
 import android.util.Patterns;
 import android.content.DialogInterface;
@@ -32,30 +35,38 @@ import android.view.*;
 
 // Adapted from https://twigstechtips.blogspot.com/2011/10/android-allow-user-to-editinput-text.html
 public class ServerIPDialog {
+    static AlertDialog dialogInstance = null;
+
+    public static boolean isShowing() {
+        if (dialogInstance==null) return false;
+        return dialogInstance.isShowing();
+    }
+
   public static void show(HelloArActivity activity, String prevIp, String prevCloudAnchor) {
     final HelloArActivity thiz = activity;
-
     final View startupDialog = thiz.getLayoutInflater().inflate(R.layout.startup_dialog, null);
     final EditText serverIp = startupDialog.findViewById(R.id.server_ip);
     final EditText cloudAnchorId = startupDialog.findViewById(R.id.cloud_anchor_id);
     final CheckBox hostCloudAnchor = startupDialog.findViewById(R.id.host_cloud_anchor_checkbox);
 
     cloudAnchorId.setText(prevCloudAnchor);
-
     serverIp.setHint("127.0.0.1");
     serverIp.setText(prevIp);
 
-    new AlertDialog.Builder(activity)
+    AlertDialog.Builder builder = new AlertDialog.Builder(activity)
         .setTitle("CloudXR Options")
         .setMessage("")
         .setView(startupDialog)
-        .setPositiveButton("Go", new DialogInterface.OnClickListener() {
+        .setPositiveButton("Connect", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
+            dialogInstance.dismiss();
+
             String ip = serverIp.getText().toString();
 
             if (Patterns.IP_ADDRESS.matcher(ip).matches()) {
                 thiz.setParams(ip, cloudAnchorId.getText().toString(), hostCloudAnchor.isChecked());
-                thiz.doResume();
+                Handler handler = new Handler(Looper.getMainLooper());
+                handler.post(() -> thiz.doResume());
             } else {
               Toast.makeText(thiz, "Invalid IP address. Try again.", Toast.LENGTH_SHORT).show();
               ServerIPDialog.show(thiz, prevIp, prevCloudAnchor);
@@ -64,9 +75,16 @@ public class ServerIPDialog {
         })
         .setNegativeButton("Exit", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
-            android.os.Process.killProcess(android.os.Process.myPid());
+              dialogInstance.dismiss();
+
+              Handler handler = new Handler(Looper.getMainLooper());
+              handler.post(() -> thiz.finish());
           }
-        })
-        .show();
+        });
+
+    dialogInstance = builder.create();
+    dialogInstance.show();
+
+    Log.v("CXR", "App settings dialog shown.");
   }
 }

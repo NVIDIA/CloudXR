@@ -45,6 +45,7 @@ import android.net.Uri;
 import android.provider.Settings;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
+import android.util.Log;
 
 /** Helper to ask permissions we need. */
 public class PermissionHelper {
@@ -53,11 +54,15 @@ public class PermissionHelper {
   private static final String WRITE_PERMISSION = Manifest.permission.READ_EXTERNAL_STORAGE;
   private static final String READ_PERMISSION = Manifest.permission.WRITE_EXTERNAL_STORAGE;
   private static final String RECORD_AUDIO = Manifest.permission.RECORD_AUDIO;
-  private static final int PERMISSION_CODE = 0;
+  private static final int PERMISSION_CODE = 1010;
+
+  public static int getRequestCode() {
+      return PERMISSION_CODE;
+  }
 
   /** Check to see we have all permissions for this app. */
   public static boolean hasPermissions(Activity activity) {
-    return ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
+    boolean okay = ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
           == PackageManager.PERMISSION_GRANTED &&
         ContextCompat.checkSelfPermission(activity, INTERNET_PERMISSION)
           == PackageManager.PERMISSION_GRANTED &&
@@ -65,11 +70,13 @@ public class PermissionHelper {
           == PackageManager.PERMISSION_GRANTED &&
         ContextCompat.checkSelfPermission(activity, READ_PERMISSION)
           == PackageManager.PERMISSION_GRANTED;
+    Log.v("CXR", "Permissions are "+(okay?"okay":"needed"));
+    return okay;
   }
 
   /** Check to see we have the required permissions for this app. */
   public static boolean hasRequiredPermissions(Activity activity) {
-    return ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
+    boolean okay = ContextCompat.checkSelfPermission(activity, CAMERA_PERMISSION)
           == PackageManager.PERMISSION_GRANTED &&
         ContextCompat.checkSelfPermission(activity, INTERNET_PERMISSION)
           == PackageManager.PERMISSION_GRANTED &&
@@ -77,10 +84,13 @@ public class PermissionHelper {
           == PackageManager.PERMISSION_GRANTED &&
         ContextCompat.checkSelfPermission(activity, READ_PERMISSION)
           == PackageManager.PERMISSION_GRANTED;
+    Log.v("CXR", "Permissions are "+(okay?"okay":"needed"));
+    return okay;
   }
 
   /** Check to see we have the necessary permissions for this app, and ask for them if we don't. */
   public static void requestPermissions(Activity activity) {
+    Log.v("CloudXR", "Requesting Permissions...");
     ActivityCompat.requestPermissions( activity,
       new String[] { CAMERA_PERMISSION, INTERNET_PERMISSION, WRITE_PERMISSION, READ_PERMISSION, RECORD_AUDIO },
       PERMISSION_CODE
@@ -97,6 +107,7 @@ public class PermissionHelper {
 
   /** Launch Application Setting to grant permission. */
   public static void launchPermissionSettings(Activity activity) {
+    Log.v("CloudXR", "Launching app settings...");
     Intent intent = new Intent();
     intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
     intent.setData(Uri.fromParts("package", activity.getPackageName(), null));

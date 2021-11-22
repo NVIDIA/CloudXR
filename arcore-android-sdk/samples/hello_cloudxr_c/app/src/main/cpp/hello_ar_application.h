@@ -68,6 +68,7 @@ class HelloArApplication {
   void HandleLaunchOptions(std::string &cmdline);
   void SetArgs(const std::string &args);
   std::string GetServerIp();
+  void NotifyUserError(ArStatus stat, const char* filename, const int linenum, bool terminate = false);
 
   // OnPause is called on the UI thread from the Activity's onPause method.
   void OnPause();
