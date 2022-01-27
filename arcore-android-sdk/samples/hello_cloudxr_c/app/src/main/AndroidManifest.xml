@@ -38,7 +38,16 @@
     <!-- This tag indicates that this application requires ARCore.  This results in the Google Play
           Store downloading and installing ARCore along with the application. -->
     <meta-data android:name="com.google.ar.core" android:value="required" />
-    <meta-data android:name="com.google.android.ar.API_KEY" android:value="AIzaSyDk8saz9rkIsoce2wIBPr1HjPZYB9RT0Tw" />
+    <!-- Note the following key is app-specific, implemented for original Cloud Anchor support.  With recent
+          changes in the ARCore design, these 'temp anchors' are somewhat deprecated, and long-lived/persistent
+          anchors sound to be the more suggested route.  For futher information on both approaches, but also
+          specifically on setting up an API_KEY to put here, see:
+              https://developers.google.com/ar/develop/java/cloud-anchors/quickstart#cloud-anchors
+          At this time, we are deprecating the feature, and have removed our specific key value below.
+          Should you want to still implement this style of anchor, just follow the docs above, create your
+          own app key, and paste in into line below.
+    -->
+    <meta-data android:name="com.google.android.ar.API_KEY" android:value="PASTE.CLOUD.API.KEY.HERE" />
 
     <activity
       android:name=".HelloArActivity"
