@@ -15,7 +15,7 @@ Prerequisites
 * Base required version of tools: Android SDK 25, NDK 21.4.7075529, Build tools 28.0.3, Gradle 6.1.1, and Gradle android plugin 3.6.4.
 * [Google Oboe SDK 1.5.0](https://github.com/google/oboe/releases/tag/1.5.0)
 * [ARCore SDK 1.26.0 or newer](https://developers.google.com/ar)
-> NOTE: Since build.gradle has ARCore listed as a dependency, the gradle build will automatically download and cache the SDK for you.  You may however find you need to adjust the ***version number*** higher based on the devices and features that you support.  This sample is currently based on ARCore SDK 1.26.0.
+  NOTE: Since build.gradle has ARCore listed as a dependency, the gradle build will automatically download and cache the SDK for you.  You may however find you need to adjust the ***version number*** higher based on the devices and features that you support.  This sample is currently based on ARCore SDK 1.26.0.
 
 Building with Android Studio
 ----------------------------
@@ -25,7 +25,7 @@ Building with Android Studio
 * Launch Android Studio and open [hello_cloudxr_c] as an existing project.
 * Build>Make the project
 
->If build fails with an error about manifest, go to File, Settings, Experimental (all the way at bottom of left list), and ***uncheck*** “Only sync the active variant” box.
+> If build fails with an error about manifest, go to File, Settings, Experimental (all the way at bottom of left list), and ***uncheck*** “Only sync the active variant” box.
 
 Building with Gradle (optional)
 -------------------------------
@@ -81,10 +81,7 @@ Optional
     * `-el [on|off]`
         * Enable/disable environmental lighting support.
         * Default is on, if performance issues try turning off.
-    * `-ca [host|<cloud anchor ID>]`
-        * Enable sharing recorded anchor data via Google ARCore Cloud Anchor support
-        * Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.
-NOTE: For more information on using launch options and a full list of all available options, see the ***Command-Line Options*** section of the online CloudXR documentation.
+* For more information on using launch options and a full list of all available options, see the ***Command-Line Options*** section of the online CloudXR documentation.
 
 License
 ----------------------

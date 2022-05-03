@@ -106,7 +106,6 @@ class HelloArApplication {
 
  private:
   void UpdateImageAnchors();
-  void UpdateCloudAnchor();
 
   static bool exiting_;
 
@@ -114,7 +113,6 @@ class HelloArApplication {
   ArFrame* ar_frame_ = nullptr;
   ArCameraIntrinsics* ar_camera_intrinsics_ = nullptr;
   ArAnchor* anchor_ = nullptr;
-  ArAnchor* cloud_anchor_ = nullptr;
 
   bool install_requested_ = false;
   int display_width_ = 1;
