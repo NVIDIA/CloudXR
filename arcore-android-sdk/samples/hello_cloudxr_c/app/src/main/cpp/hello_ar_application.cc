@@ -51,6 +51,7 @@
 #include "CloudXRClient.h"
 #include "CloudXRInputEvents.h"
 #include "CloudXRClientOptions.h"
+#include "CloudXRMatrixHelpers.h"
 
 #ifndef CHECK_NOTIFY_STATUS
 #define CHECK_NOTIFY_STATUS(stat, terminate)                                               \
@@ -68,9 +69,6 @@ class ARLaunchOptions : public CloudXR::ClientOptions {
 public:
     bool using_env_lighting_;
     float res_factor_;
-
-    bool hosting_cloud_anchor_ = false;
-    std::string cloud_anchor_id_;
 
     ARLaunchOptions() :
       ClientOptions(),
@@ -99,17 +97,6 @@ public:
                     LOGI("Resolution factor = %0.2f", res_factor_);
                     return ParseStatus_Success;
                  });
-      AddOption("cloud-anchor", "ca", true, "Share recorded anchor data in google cloud. Use 'host' to save anchors to cloud, or provide cloud anchor ID to load that anchor set from cloud.",
-                 HANDLER_LAMBDA_FN
-                 {
-                    if (tok=="host") {
-                      hosting_cloud_anchor_ = true;
-                    } else {
-                      hosting_cloud_anchor_ = false;
-                      cloud_anchor_id_ = tok;
-                    }
-                    return ParseStatus_Success;
-                 });
     }
 };
 
@@ -133,7 +120,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       std::lock_guard<std::mutex> lock(state_mutex_);
       const int idx = current_idx_ == 0 ?
           kQueueLen - 1 : (current_idx_ - 1)%kQueueLen;
-      state->hmd.pose.deviceToAbsoluteTracking = pose_matrix_[idx];
+      cxrMatrixToVecQuat(pose_matrix_ + idx, &(state->hmd.pose.position), &(state->hmd.pose.rotation));
     }
   }
   cxrBool RenderAudio(const cxrAudioFrame *audioFrame)
@@ -316,7 +303,13 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       LOGE("Failed to create CloudXR receiver. Error %d, %s.", err, cxrErrorString(err));
       return err;
     }
-    err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str(), cxrConnectionFlags_Default);
+
+    cxrConnectionDesc connectionDesc = {};
+    connectionDesc.async = cxrFalse;
+    connectionDesc.maxVideoBitrateKbps = launch_options_.mMaxVideoBitrate;
+    connectionDesc.clientNetwork = launch_options_.mClientNetwork;
+    connectionDesc.topology = launch_options_.mTopology;
+    err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str(), &connectionDesc);
     if (err != cxrError_Success)
     {
       LOGE("Failed to connect to CloudXR server at %s. Error %d, %s.", launch_options_.mServerIP.c_str(), (int)err, cxrErrorString(err));
@@ -479,6 +472,61 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     cxrBlitFrame(cloudxr_receiver_, &framesLatched_, cxrFrameMask_All);
   }
 
+  void Stats() {
+    // Log connection stats every 3 seconds
+    const int STATS_INTERVAL_SEC = 3;
+    frames_until_stats_--;
+    if (frames_until_stats_ <= 0 &&
+        cxrGetConnectionStats(cloudxr_receiver_, &stats_) == cxrError_Success)
+    {
+      // Capture the key connection statistics
+      char statsString[64] = { 0 };
+      snprintf(statsString, 64, "FPS: %6.1f    Bitrate (kbps): %5d    Latency (ms): %3d",
+               stats_.framesPerSecond, stats_.bandwidthUtilizationKbps, stats_.roundTripDelayMs);
+
+      // Turn the connection quality into a visual representation along the lines of a signal strength bar
+      char qualityString[64] = { 0 };
+      snprintf(qualityString, 64, "Connection quality: [%c%c%c%c%c]",
+               stats_.quality >= cxrConnectionQuality_Bad ? '#' : '_',
+               stats_.quality >= cxrConnectionQuality_Poor ? '#' : '_',
+               stats_.quality >= cxrConnectionQuality_Fair ? '#' : '_',
+               stats_.quality >= cxrConnectionQuality_Good ? '#' : '_',
+               stats_.quality == cxrConnectionQuality_Excellent ? '#' : '_');
+
+      // There could be multiple reasons for low quality however we show only the most impactful to the end user here
+      char reasonString[64] = { 0 };
+      if (stats_.quality <= cxrConnectionQuality_Fair)
+      {
+        if (stats_.qualityReasons == cxrConnectionQualityReason_EstimatingQuality)
+        {
+          snprintf(reasonString, 64, "Reason: Estimating quality");
+        }
+        else if (stats_.qualityReasons & cxrConnectionQualityReason_HighLatency)
+        {
+          snprintf(reasonString, 64, "Reason: High Latency (ms): %3d", stats_.roundTripDelayMs);
+        }
+        else if (stats_.qualityReasons & cxrConnectionQualityReason_LowBandwidth)
+        {
+          snprintf(reasonString, 64, "Reason: Low Bandwidth (kbps): %5d", stats_.bandwidthAvailableKbps);
+        }
+        else if (stats_.qualityReasons & cxrConnectionQualityReason_HighPacketLoss)
+        {
+          if (stats_.totalPacketsLost == 0)
+          {
+            snprintf(reasonString, 64, "Reason: High Packet Loss (Recoverable)");
+          }
+          else
+          {
+            snprintf(reasonString, 64, "Reason: High Packet Loss (%%): %3.1f", 100.0f * stats_.totalPacketsLost / stats_.totalPacketsReceived);
+          }
+        }
+      }
+
+      LOGI("%s    %s    %s", statsString, qualityString, reasonString);
+      frames_until_stats_ = (int)stats_.framesPerSecond * STATS_INTERVAL_SEC;
+    }
+  }
+
   void UpdateLightProps(const float primaryDirection[3], const float primaryIntensity[3],
       const float ambient_spherical_harmonics[27]) {
     cxrLightProperties lightProperties;
@@ -581,6 +629,9 @@ private:
 
   std::shared_ptr<oboe::AudioStream> recording_stream_{};
   std::shared_ptr<oboe::AudioStream> playback_stream_{};
+
+  cxrConnectionStats stats_ = {};
+  int frames_until_stats_ = 60;
 };
 
 // need to decl our static variable.
@@ -756,15 +807,6 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
       LOGI("AR Anchors: Tracking using environment detail.");
     }
 
-    // Enable cloud anchors when necessary
-    if (cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_ ||
-        !cloudxr_client_->GetLaunchOptions().cloud_anchor_id_.empty())
-    {
-      ArConfig_setCloudAnchorMode(ar_session_, config,
-          AR_CLOUD_ANCHOR_MODE_ENABLED);
-      LOGI("Enabling cloud anchors.");
-    }
-
       ArSession_configure(ar_session_, config);
       ArConfig_destroy(config);
     }
@@ -878,75 +920,6 @@ void HelloArApplication::UpdateImageAnchors() {
   }
 }
 
-void HelloArApplication::UpdateCloudAnchor() {
-  if (using_image_anchors_)
-    return;
-
-  const auto& launch_options = cloudxr_client_->GetLaunchOptions();
-
-  if (!launch_options.hosting_cloud_anchor_ &&
-      launch_options.cloud_anchor_id_.empty()) {
-    return;
-  }
-
-  // Lazy creation
-  if (launch_options.hosting_cloud_anchor_ && base_frame_calibrated_ &&
-      nullptr != anchor_ && nullptr == cloud_anchor_) {
-
-    ArTrackingState tracking_state = AR_TRACKING_STATE_STOPPED;
-    ArAnchor_getTrackingState(ar_session_, anchor_, &tracking_state);
-
-    if (tracking_state == AR_TRACKING_STATE_TRACKING) {
-      if (auto status = ArSession_hostAndAcquireNewCloudAnchor(ar_session_,
-          anchor_, &cloud_anchor_)) {
-        LOGE("Cloud anchor hosting failed with %d.", status);
-      }
-    }
-  } else if (!launch_options.cloud_anchor_id_.empty() &&
-      (nullptr == anchor_ || !base_frame_calibrated_)) {
-    if (auto status = ArSession_resolveAndAcquireNewCloudAnchor(ar_session_,
-        launch_options.cloud_anchor_id_.c_str(), &anchor_)) {
-      LOGE("Cloud anchor resolve failed with %d.", status);
-    } else {
-      LOGI("Cloud anchor \"%s\" resolved!",
-          launch_options.cloud_anchor_id_.c_str());
-
-      base_frame_calibrated_ = true;
-      cloud_anchor_ = anchor_;
-    }
-  }
-
-  // Grab state
-  ArCloudAnchorState state = AR_CLOUD_ANCHOR_STATE_NONE;
-  if (nullptr != cloud_anchor_) {
-    ArAnchor_getCloudAnchorState(ar_session_, cloud_anchor_, &state);
-  } else {
-    // No cloud anchor around - bail
-    return;
-  }
-
-  if (state != AR_CLOUD_ANCHOR_STATE_SUCCESS) {
-    if (state == AR_CLOUD_ANCHOR_STATE_TASK_IN_PROGRESS) {
-      LOGI("Cloud anchor in progress...");
-    } else if (state >= AR_CLOUD_ANCHOR_STATE_ERROR_INTERNAL) {
-      LOGE("Cloud anchor error state %d.", state);
-    }
-    return;
-  }
-
-  // Get hosted id and report
-  // TODO: find a way to report to user
-  if (launch_options.hosting_cloud_anchor_ && nullptr != cloud_anchor_) {
-    char* cloud_anchor_id = nullptr;
-    ArAnchor_acquireCloudAnchorId(ar_session_, cloud_anchor_,
-        &cloud_anchor_id);
-
-    LOGI("Hosted cloud anchor id: %s.", cloud_anchor_id);
-
-    ArString_release(cloud_anchor_id);
-  }
-}
-
 // Render the scene.
 // return value 0 means that Java should finish and clean up.
 int HelloArApplication::OnDrawFrame() {
@@ -1047,10 +1020,8 @@ int HelloArApplication::OnDrawFrame() {
   }
 
   UpdateImageAnchors();
-  UpdateCloudAnchor();
 
-  if (base_frame_calibrated_ &&
-      !cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_) {
+  if (base_frame_calibrated_) {
     // Try fetch base frame
     if (using_dynamic_base_frame_ && anchor_) {
       ArTrackingState tracking_state = AR_TRACKING_STATE_STOPPED;
@@ -1146,12 +1117,12 @@ int HelloArApplication::OnDrawFrame() {
       glViewport(0, 0, display_width_, display_height_);
       cloudxr_client_->Render(color_correction);
       cloudxr_client_->Release();
+      cloudxr_client_->Stats();
     }
   }
 
   // Calibrate base frame only when neccessary
-  if (!cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_ &&
-      (base_frame_calibrated_ || using_image_anchors_)) {
+  if (base_frame_calibrated_ || using_image_anchors_) {
     return(0);
   }
 
@@ -1229,12 +1200,6 @@ void HelloArApplication::OnTouched(float x, float y, bool longPress) {
     if (cloudxr_client_->IsRunning())
       cloudxr_client_->HandleTouch(x, y);
     return;  // TODO: should return true/false for handled/used the event...
-  }
-
-  // Do not ever recalibrate when hosting an anchor
-  if (base_frame_calibrated_ &&
-      cloudxr_client_->GetLaunchOptions().hosting_cloud_anchor_) {
-    return;
   }
 
   // Reset calibration on a long press
