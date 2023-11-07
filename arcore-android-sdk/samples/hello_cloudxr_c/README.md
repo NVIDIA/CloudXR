@@ -1,7 +1,7 @@
 NVIDIA CloudXR ARCore client sample
 ===================================
 
-This a sample ARCore client for AR streaming via NVIDIA CloudXR.  It is designed to work with Android tablets and phones that support the `ARCore SDK <https://developers.google.com/ar>`_. The client collects motion data from the Android device and sends it to the CloudXR server as 'pose' data. The server renders scene frames based on the client position, and streams them to the client.  The client decodes the video (and alpha when provided) streamed from the CloudXR server and blends it with the Android device's camera view.
+This is a sample ARCore client for AR streaming via NVIDIA CloudXR.  It is designed to work with Android tablets and phones that support the `ARCore SDK <https://developers.google.com/ar>`_. The client collects motion data from the Android device and sends it to the CloudXR server as 'pose' data. The server renders scene frames based on the client position, and streams them to the client.  The client decodes the video (and alpha when provided) streamed from the CloudXR server and blends it with the Android device's camera view.
 
 > :information_source: **Note**  
 > There is nothing preventing a non-AR scene, call it "2D-VR", where you are in a 3D space, you can 'look around' with the camera, but moving/translocating in the space would require some custom coding for user input. 
