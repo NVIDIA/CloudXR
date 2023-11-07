@@ -56,14 +56,14 @@ public class JniInterface {
   private static final String TAG = "JniInterface";
   static AssetManager assetManager;
 
-  public static native long createNativeApplication(AssetManager assetManager);
+  public static native long createNativeApplication(AssetManager assetManager, String jexternaldir);
   public static native void destroyNativeApplication(long nativeApplication);
 
   public static native void onPause(long nativeApplication);
 
-  public static native void handleLaunchOptions(long nativeApplication, String cmdline);
+  public static native void handleLaunchOptions(long nativeApplication, String jcmdline);
 
-  public static native void setArgs(long nativeApplication, String args);
+  public static native void setArgs(long nativeApplication, String jargs);
   public static native String getServerIp(long nativeApplication);
 
   public static native void onResume(long nativeApplication, Context context, Activity activity);

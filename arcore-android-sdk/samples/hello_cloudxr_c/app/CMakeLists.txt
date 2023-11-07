@@ -74,7 +74,8 @@ add_library(hello_cloudxr_native SHARED
            src/main/cpp/hello_ar_application.cc
            src/main/cpp/jni_interface.cc
            src/main/cpp/plane_renderer.cc
-           src/main/cpp/util.cc)
+           src/main/cpp/util.cc
+           ../../../../../shared/CloudXRFileLogger.cpp)
 
 target_include_directories(hello_cloudxr_native PRIVATE
            src/main/cpp)

@@ -59,12 +59,10 @@ namespace hello_ar {
 // HelloArApplication handles all application logics.
 class HelloArApplication {
  public:
-  // Constructor and deconstructor.
-  //HelloArApplication() = default;
-  HelloArApplication(AAssetManager* asset_manager);
+  HelloArApplication(AAssetManager* asset_manager, std::string datapath);
   ~HelloArApplication();
 
-  bool Init();
+  cxrError Init();
   void HandleLaunchOptions(std::string &cmdline);
   void SetArgs(const std::string &args);
   std::string GetServerIp();
@@ -104,10 +102,16 @@ class HelloArApplication {
     return plane_count_ > 0 || using_image_anchors_ || base_frame_calibrated_;
   }
 
+  static HelloArApplication* GetInstance() { return appinstance_; }
+
  private:
   void UpdateImageAnchors();
 
   static bool exiting_;
+  static HelloArApplication* appinstance_;
+
+  static std::string appBasePath_;
+  static std::string appOutputPath_;
 
   ArSession* ar_session_ = nullptr;
   ArFrame* ar_frame_ = nullptr;

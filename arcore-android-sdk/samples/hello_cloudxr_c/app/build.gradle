@@ -41,7 +41,7 @@ android {
                         "-DANDROID_ABI=arm64-v8a",
                         "-DARCORE_LIBPATH=${arcore_libpath}/jni",
                         "-DARCORE_INCLUDE=${project.rootDir}/../../libraries/include",
-                        "-DGLM_INCLUDE=${project.rootDir}/../../libraries/glm",
+                        "-DGLM_INCLUDE=${project.rootDir}/../../third_party/glm",
                         "-DOBOE_LIBPATH=${project.rootDir}/libs/Oboe/jni",
                         "-DOBOE_INCLUDE=${project.rootDir}/libs/Oboe/include",
                         "-DCLOUDXR_LIBPATH=${project.rootDir}/libs/CloudXR/jni",
@@ -60,6 +60,12 @@ android {
     }
 
     signingConfigs {
+        debug {
+            storeFile file('./dummy.jks')
+            storePassword 'nvidia'
+            keyAlias 'nvidia'
+            keyPassword 'nvidia'
+        }
         release {
             storeFile file('./dummy.jks')
             storePassword 'nvidia'

@@ -70,7 +70,7 @@ void BackgroundRenderer::InitializeGlContent(AAssetManager* asset_manager,
   shader_program_ = util::CreateProgram(kVertexShaderFilename,
                                         kFragmentShaderFilename, asset_manager);
   if (!shader_program_) {
-    LOGE("Could not create program.");
+    CXR_LOGE("Could not create program.");
   }
 
   shader_program_screen_ = util::CreateProgram(kVertexShaderFilename,
@@ -78,7 +78,7 @@ void BackgroundRenderer::InitializeGlContent(AAssetManager* asset_manager,
                                                asset_manager);
 
   if (!shader_program_screen_) {
-    LOGE("Could not create program.");
+    CXR_LOGE("Could not create program.");
   }
 
   glGenTextures(1, &texture_id_);

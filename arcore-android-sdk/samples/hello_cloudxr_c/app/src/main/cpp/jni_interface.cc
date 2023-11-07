@@ -68,14 +68,26 @@ jint JNI_OnLoad(JavaVM *vm, void *) {
 }
 
 JNI_METHOD(jlong, createNativeApplication)
-(JNIEnv *env, jclass, jobject j_asset_manager, jstring jcmdline) {
+(JNIEnv *env, jclass, jobject j_asset_manager, jstring jexternaldir) {
   AAssetManager *asset_manager = AAssetManager_fromJava(env, j_asset_manager);
 
-  hello_ar::HelloArApplication *app = new hello_ar::HelloArApplication(asset_manager);
+    std::string path = "";
+    if (jexternaldir != nullptr) {
+        const char *cstr = env->GetStringUTFChars(jexternaldir, nullptr);
+        if (cstr != nullptr) {
+            // stash the external path in our local string and release jni resource
+            path = cstr;
+            env->ReleaseStringUTFChars(jexternaldir, cstr);
+        }
+    }
+
+    hello_ar::HelloArApplication *app = new hello_ar::HelloArApplication(asset_manager, path);
+
   if (app == nullptr)
       return 0; // can't do anything more if failed construction.
 
-  app->Init(); // do we need a return value?
+  cxrError err = app->Init();
+  // might we need a way to pass up error codes?
 
   return jptr(app);
 }

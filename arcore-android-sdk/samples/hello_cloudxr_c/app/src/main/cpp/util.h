@@ -30,20 +30,16 @@
 #include "arcore_c_api.h"
 #include "glm.h"
 
-#ifndef LOGI
-#define LOGI(...) \
-  __android_log_print(ANDROID_LOG_INFO, "hello_ar_example_c", __VA_ARGS__)
-#endif  // LOGI
+#define LOG_TAG "CXR ARCore"
+#include "CloudXRLog.h"
 
-#ifndef LOGE
-#define LOGE(...) \
-  __android_log_print(ANDROID_LOG_ERROR, "hello_ar_example_c", __VA_ARGS__)
-#endif  // LOGE
-
+// TODO: this is cruft from original sample that needs to be nuked.  error conditions
+//  should be handled properly up the chain, and we're a 2D app so can easily display
+//  normal error dialogs and such.
 #ifndef CHECK
 #define CHECK(condition)                                                   \
   if (!(condition)) {                                                      \
-    LOGE("*** CHECK FAILED at %s:%d: %s", __FILE__, __LINE__, #condition); \
+    CXR_LOGE("*** CHECK FAILED at %s:%d: %s", __FILE__, __LINE__, #condition); \
     abort();                                                               \
   }
 #endif  // CHECK
