@@ -37,6 +37,7 @@
  */
 
 #include "hello_ar_application.h"
+#include "CloudXRFileLogger.h"
 
 #include <android/asset_manager.h>
 #include <array>
@@ -59,6 +60,9 @@
     NotifyUserError(stat, __FILE__, __LINE__, terminate);\
   }
 #endif  // CHECK
+
+// macro to switch between CloudXRFileLogger for logging, vs writing stdout here directly.
+#define LOG_TO_FILE 1
 
 namespace hello_ar {
 namespace {
@@ -94,27 +98,53 @@ public:
                     float factor = std::stof(tok);
                     if (factor >= 0.5f && factor <= 1.0f)
                       res_factor_ = factor;
-                    LOGI("Resolution factor = %0.2f", res_factor_);
+                    CXR_LOGI("Resolution factor = %0.2f", res_factor_);
                     return ParseStatus_Success;
                  });
     }
 };
 
+extern "C" void dispatchLogMsg(cxrLogLevel level, cxrMessageCategory category, void *extra, const char *tag, const char *fmt, ...)
+{
+    va_list aptr;
+    va_start(aptr, fmt);
+#if !LOG_TO_FILE
+    const int bufsize = 8192;
+    char buffer[bufsize];
+    vsnprintf(buffer, bufsize, fmt, aptr);
+    // throw to logcat.
+    __android_log_print(cxrLLToAndroidPriority(level), tag, "%s", buffer);
+#else
+    // throw to the log file
+    g_logFile.logva(level, tag, fmt, aptr);
+#endif
+    va_end(aptr);
+}
 
 class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
  public:
-  ~CloudXRClient() {
-    Teardown();
-  }
+    CloudXRClient(const std::string &outputPath) {
+        outputPath_ = outputPath;
+        // just to be clear on state variables...
+        cloudxr_receiver_ = nullptr;
+        isStreaming_ = false;
+        exiting_ = false;
+    }
+
+    virtual ~CloudXRClient() {
+        Teardown();
+    }
 
   // CloudXR interface callbacks
   void TriggerHaptic(const cxrHapticFeedback*) {}
+
   void GetTrackingState(cxrVRTrackingState* state) {
     *state = {};
 
     state->hmd.pose.poseIsValid = cxrTrue;
     state->hmd.pose.deviceIsConnected = cxrTrue;
     state->hmd.pose.trackingResult = cxrTrackingResult_Running_OK;
+    state->hmd.activityLevel = cxrDeviceActivityLevel_UserInteraction;
 
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -123,6 +153,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       cxrMatrixToVecQuat(pose_matrix_ + idx, &(state->hmd.pose.position), &(state->hmd.pose.rotation));
     }
   }
+
   cxrBool RenderAudio(const cxrAudioFrame *audioFrame)
   {
     if (!playback_stream_ || exiting_) {
@@ -152,27 +183,35 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
   }
 
   cxrDeviceDesc GetDeviceDesc() {
-    device_desc_.deliveryType = cxrDeliveryType_Mono_RGBA;
-    device_desc_.width = stream_width_;
-    device_desc_.height = stream_height_;
+    device_desc_.numVideoStreamDescs = 1;
+    device_desc_.videoStreamDescs[0].format = cxrClientSurfaceFormat_RGBA;
+    device_desc_.videoStreamDescs[0].width = stream_width_;
+    device_desc_.videoStreamDescs[0].height = stream_height_;
+    device_desc_.videoStreamDescs[0].fps = static_cast<float>(fps_);
+    device_desc_.videoStreamDescs[0].maxBitrate = launch_options_.mMaxVideoBitrate;
+    device_desc_.stereoDisplay = false;
     device_desc_.maxResFactor = 1.0f; // leave alone, don't extra oversample on server.
-    device_desc_.fps = static_cast<float>(fps_);
-    device_desc_.ipd = 0.064f;
-    device_desc_.predOffset = 0.02f;
+    device_desc_.ipd = 0.00f;
+    device_desc_.predOffset = 0.00f;
     device_desc_.receiveAudio = launch_options_.mReceiveAudio;
     device_desc_.sendAudio = launch_options_.mSendAudio;
-    device_desc_.disablePosePrediction = false;
+    device_desc_.disablePosePrediction = true;
+    device_desc_.disableVVSync = false;
     device_desc_.angularVelocityInDeviceSpace = false;
     device_desc_.foveatedScaleFactor = 0; // ensure no foveation for AR.
 
     return device_desc_;
   }
 
-  cxrError Connect() {
+  // Note we have to delay this function until after we have
+  // a working ar session and have grabbed proj matrix...
+  // TODO: this may be sufficient to push for CreateReceiver to take
+  // receiverdesc w/o devicedesc, and Connect to take devicedesc directly.
+  cxrError Init() {
     if (cloudxr_receiver_)
-      return cxrError_Success; // already connected, no error? TODO
+      return cxrError_Success; // already have receiver initialized, no error? TODO
 
-    LOGI("Connecting to CloudXR at %s...", launch_options_.mServerIP.c_str());
+    CXR_LOGI("Initializing CloudXR Receiver...");
 
     cxrGraphicsContext context{cxrGraphicsContext_GLES};
     context.egl.display = eglGetCurrentDisplay();
@@ -193,6 +232,15 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     {
         return reinterpret_cast<CloudXRClient*>(context)->RenderAudio(audioFrame);
     };
+    clientProxy.LogMessage = [](void* context, cxrLogLevel level, cxrMessageCategory category, void* extra, const char* tag, const char* const messageText)
+    {
+        // Here we call our helper fn to output same way as the log macros will.
+        // note that at the moment, we don't need/use the client context.
+        dispatchLogMsg(level, category, extra, tag, messageText);
+    };
+
+      // context is now IN the callback struct.
+    clientProxy.clientContext = this;
 
     if (device_desc.receiveAudio)
     {
@@ -210,7 +258,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
 
       oboe::Result r = playback_stream_builder.openStream(playback_stream_);
       if (r != oboe::Result::OK) {
-          LOGE("Failed to open playback stream. Error: %s", oboe::convertToText(r));
+          CXR_LOGE("Failed to open playback stream. Error: %s", oboe::convertToText(r));
           //return; // for now continue to run...
       }
       else
@@ -219,7 +267,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
           r = playback_stream_->setBufferSizeInFrames(bufferSizeFrames);
           if (r != oboe::Result::OK)
           {
-              LOGE("Failed to set playback stream buffer size to: %d. Error: %s",
+              CXR_LOGE("Failed to set playback stream buffer size to: %d. Error: %s",
                    bufferSizeFrames, oboe::convertToText(r));
               //return; // for now continue to run...
           }
@@ -228,7 +276,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
               r = playback_stream_->start();
               if (r != oboe::Result::OK)
               {
-                  LOGE("Failed to start playback stream. Error: %s", oboe::convertToText(r));
+                  CXR_LOGE("Failed to start playback stream. Error: %s", oboe::convertToText(r));
                   //return; // for now continue to run...
               }
           }
@@ -260,7 +308,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
 
       oboe::Result r = recording_stream_builder.openStream(recording_stream_);
       if (r != oboe::Result::OK) {
-          LOGE("Failed to open recording stream. Error: %s", oboe::convertToText(r));
+          CXR_LOGE("Failed to open recording stream. Error: %s", oboe::convertToText(r));
           //return; // for now continue to run...
       }
       else
@@ -268,7 +316,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
           r = recording_stream_->start();
           if (r != oboe::Result::OK)
           {
-              LOGE("Failed to start recording stream. Error: %s", oboe::convertToText(r));
+              CXR_LOGE("Failed to start recording stream. Error: %s", oboe::convertToText(r));
               //return; // for now continue to run...
           }
       }
@@ -284,44 +332,55 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       }
     }
 
-    LOGI("Audio support: receive [%s], send [%s]", device_desc.receiveAudio?"on":"off", device_desc.sendAudio?"on":"off");
+    CXR_LOGI("Audio support: receive [%s], send [%s]", device_desc.receiveAudio?"on":"off", device_desc.sendAudio?"on":"off");
 
     cxrReceiverDesc desc = { 0 };
     desc.requestedVersion = CLOUDXR_VERSION_DWORD;
     desc.deviceDesc = device_desc;
     desc.clientCallbacks = clientProxy;
-    desc.clientContext = this;
     desc.shareContext = &context;
-    desc.numStreams = CXR_NUM_VIDEO_STREAMS_XR;
-    desc.receiverMode = cxrStreamingMode_XR;
-    desc.debugFlags = launch_options_.mDebugFlags;
+    desc.debugFlags = launch_options_.mDebugFlags | cxrDebugFlags_OutputLinearRGBColor; // we don't have end to end srgb, so need to shift to linear output.
     desc.logMaxSizeKB = CLOUDXR_LOG_MAX_DEFAULT;
     desc.logMaxAgeDays = CLOUDXR_LOG_MAX_DEFAULT;
+    strncpy(desc.appOutputPath, outputPath_.c_str(), CXR_MAX_PATH - 1);
+    desc.appOutputPath[CXR_MAX_PATH-1] = 0; // ensure null terminated if string was too long.
     cxrError err = cxrCreateReceiver(&desc, &cloudxr_receiver_);
     if (err != cxrError_Success)
     {
-      LOGE("Failed to create CloudXR receiver. Error %d, %s.", err, cxrErrorString(err));
+      CXR_LOGE("Failed to create CloudXR receiver. Error %d, %s.", err, cxrErrorString(err));
       return err;
     }
 
+    // else, good to go.
+    CXR_LOGI("Receiver successfully created.");
+    return cxrError_Success;
+}
+
+  cxrError Connect() {
+    if (!IsCreated())
+      return cxrError_Client_Setup_Failed;
+
+    cxrError err;
     cxrConnectionDesc connectionDesc = {};
+
+    CXR_LOGI("Connecting to CloudXR at %s...", launch_options_.mServerIP.c_str());
+
     connectionDesc.async = cxrFalse;
-    connectionDesc.maxVideoBitrateKbps = launch_options_.mMaxVideoBitrate;
+    connectionDesc.useL4S = launch_options_.mUseL4S;
     connectionDesc.clientNetwork = launch_options_.mClientNetwork;
     connectionDesc.topology = launch_options_.mTopology;
     err = cxrConnect(cloudxr_receiver_, launch_options_.mServerIP.c_str(), &connectionDesc);
     if (err != cxrError_Success)
     {
-      LOGE("Failed to connect to CloudXR server at %s. Error %d, %s.", launch_options_.mServerIP.c_str(), (int)err, cxrErrorString(err));
-      Teardown();
+      CXR_LOGE("Failed to connect to CloudXR server at %s. Error %d, %s.", launch_options_.mServerIP.c_str(), (int)err, cxrErrorString(err));
       return err;
     }
-
     // else, good to go.
-    LOGI("Receiver created!");
+    CXR_LOGI("Receiver connected to server!");
+    isStreaming_ = true;
 
     // AR shouldn't have an arena, should it?  Maybe something large?
-    //LOGI("Setting default 1m radius arena boundary.", result);
+    //CXR_LOGI("Setting default 1m radius arena boundary.", result);
     //cxrSetArenaBoundary(Receiver, 10.f, 0, 0);
 
     return cxrError_Success;
@@ -341,14 +400,21 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     }
 
     if (cloudxr_receiver_) {
-      LOGI("Tearing down CloudXR...");
+      CXR_LOGI("Tearing down CloudXR...");
       cxrDestroyReceiver(cloudxr_receiver_);
       cloudxr_receiver_ = nullptr;
+      isStreaming_ = false;
     }
   }
 
-  bool IsRunning() const {
-    return cloudxr_receiver_;
+  // this is whether we created the CloudXR Receiver
+  bool IsCreated() const {
+    return (nullptr != cloudxr_receiver_);
+  }
+
+  // this is if we're connected to a server and streaming
+  bool IsStreaming() const {
+    return isStreaming_;
   }
 
   void SetPoseMatrix(const glm::mat4& pose_mat) {
@@ -402,7 +468,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     device_desc_.proj[1][2] = 0;
     device_desc_.proj[1][3] = 0;
 
-    LOGI("Proj: %f %f %f %f", device_desc_.proj[0][0], device_desc_.proj[0][1],
+    CXR_LOGI("Proj: %f %f %f %f", device_desc_.proj[0][0], device_desc_.proj[0][1],
         device_desc_.proj[0][2], device_desc_.proj[0][3]);
   }
 
@@ -437,8 +503,8 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
       return cxrError_Success;
     }
 
-    if (!IsRunning()) {
-      return cxrError_Receiver_Not_Running;
+    if (!IsStreaming()) {
+      return cxrError_Not_Connected;
     }
 
     // Fetch the frame
@@ -447,7 +513,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
             cxrFrameMask_All, timeout_ms);
 
     if (status != cxrError_Success) {
-      LOGI("CloudXR frame is not available!");
+      CXR_LOGI("CloudXR frame is not available!");
       return status;
     }
 
@@ -465,11 +531,11 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
   }
 
   void Render(const float color_correction[4]) {
-    if (!IsRunning() || !latched_) {
-      return;
+    if (!IsStreaming() || !latched_) {
+      return; // we have nothing to blit...
     }
 
-    cxrBlitFrame(cloudxr_receiver_, &framesLatched_, cxrFrameMask_All);
+    cxrBlitFrame(cloudxr_receiver_, &framesLatched_, cxrFrameMask_Mono_With_Alpha);
   }
 
   void Stats() {
@@ -522,7 +588,7 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
         }
       }
 
-      LOGI("%s    %s    %s", statsString, qualityString, reasonString);
+      CXR_LOGI("%s    %s    %s", statsString, qualityString, reasonString);
       frames_until_stats_ = (int)stats_.framesPerSecond * STATS_INTERVAL_SEC;
     }
   }
@@ -543,27 +609,44 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     cxrSendLightProperties(cloudxr_receiver_, &lightProperties);
   }
 
-
-  bool Init() {
-    return true;
-  }
-
   bool HandleLaunchOptions(std::string &cmdline) {
+    std::string optionsPath = appBasePath_;
+    optionsPath.append("/CloudXRLaunchOptions.txt");
+
     // first, try to read "command line in a text file"
-    launch_options_.ParseFile("/sdcard/CloudXRLaunchOptions.txt");
+    ParseStatus p = launch_options_.ParseFile(optionsPath.c_str());
+    if (p != ParseStatus_Success)
+      CXR_LOGE("Unable to open launch options file, %s", strerror(errno));
+
     // next, process actual 'commandline' args -- overrides any prior values
-    LOGI("Parsing commandline string: %s", cmdline.c_str());
+    CXR_LOGI("Parsing commandline string: %s", cmdline.c_str());
     launch_options_.ParseString(cmdline);
 
     // we log error here if no server (if have no 'input UI', we have no other source)
     if (launch_options_.mServerIP.empty())
-      LOGE("No server IP specified yet to connect to.");
+      CXR_LOGE("No server IP specified yet to connect to.");
+
+    // set any logger options PRIOR to init call.
+    if (launch_options_.mDebugFlags & cxrDebugFlags_LogQuiet) // quiet takes precedence
+      g_logFile.setLogLevel(cxrLL_Silence);
+    else if (launch_options_.mDebugFlags & cxrDebugFlags_LogVerbose)
+      g_logFile.setLogLevel(cxrLL_Verbose);
+    else
+      g_logFile.setLogLevel(cxrLL_Debug); // otherwise defaults to Info.
+
+    g_logFile.setPrivacyEnabled((launch_options_.mDebugFlags & cxrDebugFlags_LogPrivacyDisabled) ? 0 : 1);
+    g_logFile.setMaxSizeKB(launch_options_.mLogMaxSizeKB);
+    g_logFile.setMaxAgeDays(launch_options_.mLogMaxAgeDays);
+
+    // start up file logging now, should be safe to do so since we have options loaded.
+    std::string filePrefix = "CloudXR AR Sample";
+    g_logFile.init(appOutputPath_, filePrefix);
 
     return true;
   }
 
   void SetArgs(const std::string &args) {
-    LOGI("App args: %s.", args.c_str());
+    CXR_LOGI("App args: %s.", args.c_str());
     launch_options_.ParseString(args);
   }
 
@@ -587,13 +670,13 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
     // apply the res factor to width and height, and make sure they are even for stream res.
     stream_width_ = ((uint32_t)round((float)w * launch_options_.res_factor_)) & ~1;
     stream_height_ = ((uint32_t)round((float)h * launch_options_.res_factor_)) & ~1;
-    LOGI("SetStreamRes: Display res passed = %dx%d", w, h);
-    LOGI("SetStreamRes: Stream res set = %dx%d [factor %0.2f]", stream_width_, stream_height_, launch_options_.res_factor_);
+    CXR_LOGI("SetStreamRes: Display res passed = %dx%d", w, h);
+    CXR_LOGI("SetStreamRes: Stream res set = %dx%d [factor %0.2f]", stream_width_, stream_height_, launch_options_.res_factor_);
   }
 
   // Send a touch event along to the server/host application
   void HandleTouch(float x, float y) {
-    if (!IsRunning()) return;
+    if (!IsStreaming()) return;
 
     cxrInputEvent input;
     input.type = cxrInputEventType_Touch;
@@ -610,7 +693,9 @@ class HelloArApplication::CloudXRClient : public oboe::AudioStreamDataCallback {
 private:
   static constexpr int kQueueLen = BackgroundRenderer::kQueueLen;
 
+  std::string outputPath_ = {};
   cxrReceiverHandle cloudxr_receiver_ = nullptr;
+  bool isStreaming_ = false;
 
   ARLaunchOptions launch_options_;
 
@@ -633,13 +718,19 @@ private:
   cxrConnectionStats stats_ = {};
   int frames_until_stats_ = 60;
 };
+// ===== END OF CloudXRClient =====
 
-// need to decl our static variable.
+// need to decl our static variables.
 bool HelloArApplication::exiting_ = false;
+std::string HelloArApplication::appBasePath_ = "";
+std::string HelloArApplication::appOutputPath_ = "";
 
-HelloArApplication::HelloArApplication(AAssetManager* asset_manager)
+HelloArApplication::HelloArApplication(AAssetManager* asset_manager, std::string datapath)
     : asset_manager_(asset_manager) {
-  cloudxr_client_ = std::make_unique<HelloArApplication::CloudXRClient>();
+  // stash paths in members BEFORE making client, as we pass in ouputPath to constructor.
+  appBasePath_ = datapath;
+  appOutputPath_ = datapath + "/logs/"; // Note you can set where output files go rel to app base.
+  cloudxr_client_ = std::make_unique<HelloArApplication::CloudXRClient>(appOutputPath_);
   exiting_ = false; // reset static here in case library remains resident..
 }
 
@@ -656,11 +747,14 @@ HelloArApplication::~HelloArApplication() {
     ArSession_destroy(ar_session_);
     ar_session_ = nullptr;
   }
+
+  cloudxr_client_ = nullptr; // this is smart ptr, null will destroy
 }
 
-// use for any deeper, failure-possible init of app, or cxr client.
-bool HelloArApplication::Init() {
-  return cloudxr_client_->Init();
+// other initialization of app/cxr client, which could fail.
+// note the jni interface does NOT currently pass along errors...
+cxrError HelloArApplication::Init() {
+  return cxrError_Success;
 }
 
 // pass server address direct to client.
@@ -679,13 +773,13 @@ std::string HelloArApplication::GetServerIp() {
 }
 
 void HelloArApplication::NotifyUserError(ArStatus stat, const char* filename, const int linenum, bool terminate /*==false*/) {
-    LOGE("Error #%d from ARCore at %s:%d", stat, filename, linenum);
+    CXR_LOGE("Error #%d from ARCore at %s:%d", stat, filename, linenum);
     // TODO: should really push back to Java and display a dialog before exiting, and exit cleanly.
     if (terminate) abort();
 }
 
 void HelloArApplication::OnPause() {
-  LOGI("OnPause()");
+  CXR_LOGI("OnPause()");
   if (ar_session_ != nullptr) {
     ArSession_pause(ar_session_);
   }
@@ -696,7 +790,7 @@ void HelloArApplication::OnPause() {
 void HelloArApplication::OnResume(void* env, void* context, void* activity) {
   ArStatus stat;
 
-  LOGI("OnResume()");
+  CXR_LOGI("OnResume()");
 
   if (ar_session_ == nullptr) {
     ArInstallStatus install_status;
@@ -749,7 +843,7 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
     ArCameraConfigList_getSize(ar_session_, all_camera_configs, &num_configs);
 
     if (num_configs < 1) {
-      LOGE("No 60Hz camera available!  Setting to 30fps.");
+      CXR_LOGE("No 60Hz camera available!  Setting to 30fps.");
       cloudxr_client_->SetFps(30);
     } else {
       ArCameraConfig* camera_config;
@@ -767,7 +861,7 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
 
     if (FILE* f = fopen("/sdcard/image_anchors.imgdb", "rb"))
     {
-      LOGI("Image anchors DB found.");
+      CXR_LOGI("Image anchors DB found.");
 
       fseek(f, 0, SEEK_END);
       size_t db_size = ftell(f);
@@ -781,7 +875,7 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
           ar_session_, raw_buffer, db_size, &ar_augmented_image_database);
 
       if (status != AR_SUCCESS) {
-        LOGI("Unable to deserialize image anchors DB!");
+        CXR_LOGI("Unable to deserialize image anchors DB!");
       }
 
       delete [] raw_buffer;
@@ -800,11 +894,11 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
       ArConfig_setAugmentedImageDatabase(ar_session_, config,
                                          ar_augmented_image_database);
       using_image_anchors_ = true;
-      LOGI("AR Anchors: Tracking using IMAGE ANCHOR DB.");
+      CXR_LOGI("AR Anchors: Tracking using IMAGE ANCHOR DB.");
 
       ArAugmentedImageDatabase_destroy(ar_augmented_image_database);
     } else {
-      LOGI("AR Anchors: Tracking using environment detail.");
+      CXR_LOGI("AR Anchors: Tracking using environment detail.");
     }
 
       ArSession_configure(ar_session_, config);
@@ -823,11 +917,11 @@ void HelloArApplication::OnResume(void* env, void* context, void* activity) {
   ArCameraIntrinsics_getImageDimensions(ar_session_, ar_camera_intrinsics_,
                                         &cam_image_width_, &cam_image_height_);
 
-  LOGI("Camera res: %dx%d", cam_image_width_, cam_image_height_);
+  CXR_LOGI("Camera res: %dx%d", cam_image_width_, cam_image_height_);
 }
 
 void HelloArApplication::OnSurfaceCreated() {
-  LOGI("OnSurfaceCreated()");
+  CXR_LOGI("OnSurfaceCreated()");
 
   background_renderer_.InitializeGlContent(asset_manager_, cam_image_width_, cam_image_height_);
   plane_renderer_.InitializeGlContent(asset_manager_);
@@ -835,7 +929,7 @@ void HelloArApplication::OnSurfaceCreated() {
 
 void HelloArApplication::OnDisplayGeometryChanged(int display_rotation,
                                                   int width, int height) {
-  LOGI("OnDisplayGeometryChanged(%d, %d, %d)", display_rotation, width, height);
+  CXR_LOGI("OnDisplayGeometryChanged(%d, %d, %d)", display_rotation, width, height);
   glViewport(0, 0, width, height);
   display_rotation_ = display_rotation;
   display_width_ = width;
@@ -876,7 +970,7 @@ void HelloArApplication::UpdateImageAnchors() {
       case AR_TRACKING_STATE_PAUSED:
         // When an image is in PAUSED state but the camera is not PAUSED,
         // that means the image has been detected but not yet tracked.
-        LOGI("Detected Image %d", image_index);
+        CXR_LOGI("Detected Image %d", image_index);
         break;
       case AR_TRACKING_STATE_TRACKING:
         if (augmented_image_map.find(image_index) ==
@@ -945,7 +1039,7 @@ int HelloArApplication::OnDrawFrame() {
 
   // Update session to get current frame and render camera background.
   if (ArSession_update(ar_session_, ar_frame_) != AR_SUCCESS) {
-    LOGE("HelloArApplication::OnDrawFrame ArSession_update error");
+    CXR_LOGE("HelloArApplication::OnDrawFrame ArSession_update error");
   }
 
   ArCamera* ar_camera;
@@ -970,7 +1064,7 @@ int HelloArApplication::OnDrawFrame() {
 
   glViewport(0, 0, display_width_, display_height_);
 
-  if (!cloudxr_client_->IsRunning() || !base_frame_calibrated_) {
+  if (!cloudxr_client_->IsStreaming() || !base_frame_calibrated_) {
     // Draw camera image to the screen
     background_renderer_.Draw(ar_session_, ar_frame_, 0);
   }
@@ -980,12 +1074,12 @@ int HelloArApplication::OnDrawFrame() {
     if (camera_tracking_state == AR_TRACKING_STATE_STOPPED)
     {
       if (camera_tracking_state != camera_last_state)
-        LOGI("Note camera tracking is in STOPPED state.");
+        CXR_LOGI("Note camera tracking is in STOPPED state.");
     }
     else
     { // camera is paused state
       if (camera_tracking_state != camera_last_state)
-        LOGI("Note camera tracking is PAUSED.");
+        CXR_LOGI("Note camera tracking is PAUSED.");
       ArTrackingFailureReason reason;
       ArCamera_getTrackingFailureReason(ar_session_, ar_camera, &reason);
       switch(reason)
@@ -993,16 +1087,16 @@ int HelloArApplication::OnDrawFrame() {
           case AR_TRACKING_FAILURE_REASON_NONE:
               break;
           case AR_TRACKING_FAILURE_REASON_BAD_STATE:
-              if (reason!=lastReason) LOGE("Camera tracking lost due to bad internal state.");
+              if (reason!=lastReason) CXR_LOGE("Camera tracking lost due to bad internal state.");
               break;
           case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_LIGHT:
-              if (reason!=lastReason) LOGE("Camera tracking lost due to insufficient lighting.  Please move to brighter area.");
+              if (reason!=lastReason) CXR_LOGE("Camera tracking lost due to insufficient lighting.  Please move to brighter area.");
               break;
           case AR_TRACKING_FAILURE_REASON_EXCESSIVE_MOTION:
-              if (reason!=lastReason) LOGE("Camera tracking lost due to excessive motion.  Please move more slowly.");
+              if (reason!=lastReason) CXR_LOGE("Camera tracking lost due to excessive motion.  Please move more slowly.");
               break;
           case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_FEATURES:
-              if (reason!=lastReason) LOGE("Camera tracking lost due to insufficient visual features to track.  Move to area with more surface details.");
+              if (reason!=lastReason) CXR_LOGE("Camera tracking lost due to insufficient visual features to track.  Move to area with more surface details.");
               break;
       }
       // cache reason+state so we only log errors once...
@@ -1014,7 +1108,7 @@ int HelloArApplication::OnDrawFrame() {
 
   // We need to (re)calibrate but CloudXR client is running - continue
   // pulling the frames. There'll be a lag otherwise.
-  if (!base_frame_calibrated_ && cloudxr_client_->IsRunning()) {
+  if (!base_frame_calibrated_ && cloudxr_client_->IsStreaming()) {
     if (cloudxr_client_->Latch()==cxrError_Success)
       cloudxr_client_->Release();
   }
@@ -1037,20 +1131,28 @@ int HelloArApplication::OnDrawFrame() {
       }
     }
 
-    if (!cloudxr_client_->IsRunning()) {
-      cloudxr_client_->SetProjectionMatrix(projection_mat);
-      cxrError status = cloudxr_client_->Connect();
+    if (!cloudxr_client_->IsStreaming()) {
+      cxrError status = cxrError_Success;
+      if (!cloudxr_client_->IsCreated()) {
+        // now we can set projection matrix, and initialize the cxr_client (which really does cxrCreateReceiver)
+        cloudxr_client_->SetProjectionMatrix(projection_mat);
+        status = cloudxr_client_->Init();
+      }
+
+      if (status == cxrError_Success) {
+        status = cloudxr_client_->Connect();
+      }
       // for sync connection, this will do for now to error check..
       if (status != cxrError_Success) {
-          exiting_ = true;
-          return((int)status); // TODO: real error codes?
+        exiting_ = true;
+        return ((int) status);
       }
     }
 
     const cxrError status = cloudxr_client_->Latch();
     if (status != cxrError_Success) {
-      LOGE("Latch failed, %s", cxrErrorString(status));
-      if (status == cxrError_Receiver_Not_Running) {
+      CXR_LOGE("Latch failed, %s", cxrErrorString(status));
+      if (status == cxrError_Not_Connected) {
         exiting_ = true;
         return status;
       }
@@ -1174,7 +1276,7 @@ int HelloArApplication::OnDrawFrame() {
     }
 
     if (ArTrackingState::AR_TRACKING_STATE_TRACKING != out_tracking_state) {
-      LOGE("Tracked plane lost, skipping drawing.");
+      CXR_LOGE("Tracked plane lost, skipping drawing.");
       continue;
     }
 
@@ -1197,7 +1299,7 @@ int HelloArApplication::OnDrawFrame() {
 void HelloArApplication::OnTouched(float x, float y, bool longPress) {
   // if base frame is calibrated and user is not asking to reset, pass touches to server
   if (base_frame_calibrated_ && !longPress) {
-    if (cloudxr_client_->IsRunning())
+    if (cloudxr_client_->IsStreaming())
       cloudxr_client_->HandleTouch(x, y);
     return;  // TODO: should return true/false for handled/used the event...
   }
@@ -1235,7 +1337,7 @@ void HelloArApplication::OnTouched(float x, float y, bool longPress) {
       ArHitResultList_getItem(ar_session_, hit_result_list, i, ar_hit);
 
       if (ar_hit == nullptr) {
-        LOGE("HelloArApplication::OnTouched ArHitResultList_getItem error");
+        CXR_LOGE("HelloArApplication::OnTouched ArHitResultList_getItem error");
         return;
       }
 
@@ -1291,7 +1393,7 @@ void HelloArApplication::OnTouched(float x, float y, bool longPress) {
       ArAnchor* anchor = nullptr;
       if (ArHitResult_acquireNewAnchor(ar_session_, ar_hit_result, &anchor) !=
           AR_SUCCESS) {
-        LOGE(
+        CXR_LOGE(
             "HelloArApplication::OnTouched ArHitResult_acquireNewAnchor error");
         return;
       }

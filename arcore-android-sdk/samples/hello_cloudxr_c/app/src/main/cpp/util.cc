@@ -27,7 +27,7 @@ namespace util {
 void CheckGlError(const char* operation) {
   bool anyError = false;
   for (GLint error = glGetError(); error; error = glGetError()) {
-    LOGE("after %s() glError (0x%x)\n", operation, error);
+    CXR_LOGE("after %s() glError (0x%x)\n", operation, error);
     anyError = true;
   }
   if (anyError) {
@@ -61,7 +61,7 @@ static GLuint LoadShader(GLenum shader_type, const char* shader_source) {
     }
 
     glGetShaderInfoLog(shader, info_len, nullptr, buf);
-    LOGE("hello_ar::util::Could not compile shader %d:\n%s\n", shader_type,
+    CXR_LOGE("hello_ar::util::Could not compile shader %d:\n%s\n", shader_type,
          buf);
     free(buf);
     glDeleteShader(shader);
@@ -77,14 +77,14 @@ GLuint CreateProgram(const char* vertex_shader_file_name,
   std::string VertexShaderContent;
   if (!LoadTextFileFromAssetManager(vertex_shader_file_name, asset_manager,
                                     &VertexShaderContent)) {
-    LOGE("Failed to load file: %s", vertex_shader_file_name);
+    CXR_LOGE("Failed to load file: %s", vertex_shader_file_name);
     return 0;
   }
 
   std::string FragmentShaderContent;
   if (!LoadTextFileFromAssetManager(fragment_shader_file_name, asset_manager,
                                     &FragmentShaderContent)) {
-    LOGE("Failed to load file: %s", fragment_shader_file_name);
+    CXR_LOGE("Failed to load file: %s", fragment_shader_file_name);
     return 0;
   }
 
@@ -116,7 +116,7 @@ GLuint CreateProgram(const char* vertex_shader_file_name,
         char* buf = reinterpret_cast<char*>(malloc(buf_length));
         if (buf) {
           glGetProgramInfoLog(program, buf_length, nullptr, buf);
-          LOGE("hello_ar::util::Could not link program:\n%s\n", buf);
+          CXR_LOGE("hello_ar::util::Could not link program:\n%s\n", buf);
           free(buf);
         }
       }
@@ -136,7 +136,7 @@ bool LoadTextFileFromAssetManager(const char* file_name,
   AAsset* asset =
       AAssetManager_open(asset_manager, file_name, AASSET_MODE_STREAMING);
   if (asset == nullptr) {
-    LOGE("Error opening asset %s", file_name);
+    CXR_LOGE("Error opening asset %s", file_name);
     return false;
   }
 
@@ -145,7 +145,7 @@ bool LoadTextFileFromAssetManager(const char* file_name,
   int ret = AAsset_read(asset, &out_file_text_string->front(), file_size);
 
   if (ret <= 0) {
-    LOGE("Failed to open file: %s", file_name);
+    CXR_LOGE("Failed to open file: %s", file_name);
     AAsset_close(asset);
     return false;
   }
@@ -182,7 +182,7 @@ bool LoadPngFromAssetManager(int target, const std::string& path) {
           helper_class, kLoadTextureMethodName, kLoadTextureMethodSignature);
       return {helper_class, load_image_method, load_texture_method};
     }
-    LOGE("hello_ar::util::Could not find Java helper class %s",
+    CXR_LOGE("hello_ar::util::Could not find Java helper class %s",
          kHelperClassName);
     return {};
   }();
@@ -235,7 +235,7 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
       int matches = sscanf(line_header, "vn %f %f %f\n", &normal[0], &normal[1],
                            &normal[2]);
       if (matches != 3) {
-        LOGE("Format of 'vn float float float' required for each normal line");
+        CXR_LOGE("Format of 'vn float float float' required for each normal line");
         return false;
       }
 
@@ -247,7 +247,7 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
       GLfloat uv[2];
       int matches = sscanf(line_header, "vt %f %f\n", &uv[0], &uv[1]);
       if (matches != 2) {
-        LOGE("Format of 'vt float float' required for each texture uv line");
+        CXR_LOGE("Format of 'vt float float' required for each texture uv line");
         return false;
       }
 
@@ -259,7 +259,7 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
       int matches = sscanf(line_header, "v %f %f %f\n", &vertex[0], &vertex[1],
                            &vertex[2]);
       if (matches != 3) {
-        LOGE("Format of 'v float float float' required for each vertice line");
+        CXR_LOGE("Format of 'v float float float' required for each vertice line");
         return false;
       }
 
@@ -323,7 +323,7 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
             // normal face only has two values.
             default:
               // Error formatting.
-              LOGE(
+              CXR_LOGE(
                   "Format of 'f int/int/int int/int/int int/int/int "
                   "(int/int/int)' "
                   "or 'f int//int int//int int//int (int//int)' required for "
@@ -359,12 +359,12 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
   bool is_uv_available = (!uv_indices.empty());
 
   if (is_normal_available && normal_indices.size() != vertex_indices.size()) {
-    LOGE("Obj normal indices does not equal to vertex indices.");
+    CXR_LOGE("Obj normal indices does not equal to vertex indices.");
     return false;
   }
 
   if (is_uv_available && uv_indices.size() != vertex_indices.size()) {
-    LOGE("Obj UV indices does not equal to vertex indices.");
+    CXR_LOGE("Obj UV indices does not equal to vertex indices.");
     return false;
   }
 
@@ -393,7 +393,7 @@ bool LoadObjFile(const std::string& file_name, AAssetManager* asset_manager,
 }
 
 void Log4x4Matrix(const float raw_matrix[16]) {
-  LOGI(
+  CXR_LOGI(
       "%f, %f, %f, %f\n"
       "%f, %f, %f, %f\n"
       "%f, %f, %f, %f\n"
@@ -408,7 +408,7 @@ void GetTransformMatrixFromAnchor(const ArAnchor& ar_anchor,
                                   ArSession* ar_session,
                                   glm::mat4* out_model_mat) {
   if (out_model_mat == nullptr) {
-    LOGE("util::GetTransformMatrixFromAnchor model_mat is null.");
+    CXR_LOGE("util::GetTransformMatrixFromAnchor model_mat is null.");
     return;
   }
   util::ScopedArPose pose(ar_session);

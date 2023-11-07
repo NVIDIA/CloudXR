@@ -28,7 +28,7 @@ void PlaneRenderer::InitializeGlContent(AAssetManager* asset_manager) {
   shader_program_ = util::CreateProgram(kVertexShaderFilename,
                                         kFragmentShaderFilename, asset_manager);
   if (!shader_program_) {
-    LOGE("Could not create program.");
+    CXR_LOGE("Could not create program.");
   }
 
   uniform_mvp_mat_ = glGetUniformLocation(shader_program_, "mvp");
@@ -47,7 +47,7 @@ void PlaneRenderer::InitializeGlContent(AAssetManager* asset_manager) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   if (!util::LoadPngFromAssetManager(GL_TEXTURE_2D, "models/trigrid.png")) {
-    LOGE("Could not load png texture for planes.");
+    CXR_LOGE("Could not load png texture for planes.");
   }
 
   glGenerateMipmap(GL_TEXTURE_2D);
@@ -61,7 +61,7 @@ void PlaneRenderer::Draw(const glm::mat4& projection_mat,
                          const glm::mat4& view_mat, const ArSession& ar_session,
                          const ArPlane& ar_plane, const glm::vec3& color) {
   if (!shader_program_) {
-    LOGE("shader_program is null.");
+    CXR_LOGE("shader_program is null.");
     return;
   }
 
@@ -116,7 +116,7 @@ void PlaneRenderer::UpdateForPlane(const ArSession& ar_session,
   ArPlane_getPolygonSize(&ar_session, &ar_plane, &polygon_length);
 
   if (polygon_length == 0) {
-    LOGE("PlaneRenderer::UpdatePlane, no valid plane polygon is found");
+    CXR_LOGE("PlaneRenderer::UpdatePlane, no valid plane polygon is found");
     return;
   }
 
